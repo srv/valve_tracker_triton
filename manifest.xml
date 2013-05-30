@@ -1,0 +1,20 @@
+<package>
+  <description brief="valve_tracker_triton">
+
+     valve_tracker_triton
+
+  </description>
+  <author>Miquel Massot</author>
+  <license>BSD</license>
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/valve_tracker_triton</url>
+  <depend package="roscpp"/>
+  <depend package="image_transport"/>
+  <depend package="tf"/>
+  <depend package="image_geometry"/>
+  <depend package="sensor_msgs"/>
+  <depend package="cv_bridge"/>
+
+</package>
+
+
