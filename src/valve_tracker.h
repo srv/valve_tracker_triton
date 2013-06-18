@@ -5,20 +5,18 @@
 #include <image_transport/image_transport.h>
 #include <image_transport/camera_subscriber.h>
 #include <tf/transform_listener.h>
-
 #include "stereo_processor.h"
 
 class ValveTracker : public StereoImageProcessor
 {
 public:
 
-
   ValveTracker(const std::string transport);
-  bool process(cv::Mat img, int type);
+  void process(cv::Mat img, int type);
 
 protected:
   std::string stereo_frame_id_;
-  std::string base_link_frame_id_;
+  std::string valve_frame_id_;
   image_transport::Publisher image_pub_;
 
 private:
@@ -48,7 +46,7 @@ private:
   int show_debug_images_;
 
   std::vector<std::vector<cv::Point2d> > points_;
-  std::vector<cv::Point3d > points3d_;
+  std::vector<cv::Point3d> points3d_;
 
   void stereoImageCallback(
       const sensor_msgs::ImageConstPtr& l_image_msg,
@@ -57,7 +55,11 @@ private:
       const sensor_msgs::CameraInfoConstPtr& r_info_msg);
 
   cv::Mat createElement(int element_size);
-  void triangulatePoints(void);
+  double distCamera2Point(cv::Point3d point);
+  tf::Transform mat2tf(cv::Mat input);
+  void drawTf(tf::Transform input);
+  void triangulatePoints();
+  tf::Transform fitModel();
   
   //static bool sort_points_x(const cv::Point2d& p1, const cv::Point2d& p2);
 
