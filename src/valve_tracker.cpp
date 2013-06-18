@@ -10,12 +10,6 @@
 #define LEFT 0
 #define RIGHT 1
 
-
-bool sort_points_x(const cv::Point2d& p1,const cv::Point2d& p2)
-{
-  return (p1.x < p2.x);
-}
-
 /** \brief ValveTracker constructor
   * \param transport
   */
@@ -276,8 +270,8 @@ void valve_tracker::ValveTracker::triangulatePoints()
       }
       
       // Sort them and assign correspondences
-      std::sort(left_points.begin(), left_points.end(), sort_points_x);
-      std::sort(right_points.begin(), right_points.end(), sort_points_x);
+      std::sort(left_points.begin(), left_points.end(), valve_tracker::Utils::sort_points_x);
+      std::sort(right_points.begin(), right_points.end(), valve_tracker::Utils::sort_points_x);
 
       std::vector<cv::Point2d>::iterator it;
       it = std::find(left_points.begin(), left_points.end(), pl);

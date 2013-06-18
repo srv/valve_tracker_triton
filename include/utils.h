@@ -71,6 +71,16 @@ namespace valve_tracker
 		  return output;   
 		}
 
+		/** \brief Sort 2 points
+		  * @return true if point 1 is smaller than point 2
+		  * \param point 1
+		  * \param point 2
+		  */
+		static bool sort_points_x(const cv::Point2d& p1,const cv::Point2d& p2)
+		{
+			return (p1.x < p2.x);
+		}
+
 	};
 } // namespace
 
