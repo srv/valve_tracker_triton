@@ -14,7 +14,7 @@ public:
 
 
   ValveTracker(const std::string transport);
-  bool process(cv::Mat left, cv::Mat right);
+  bool process(cv::Mat img);
 
 protected:
   std::string stereo_frame_id_;
@@ -29,13 +29,27 @@ private:
   cv::Mat processed_;
 
   image_geometry::StereoCameraModel stereo_model_;
-  image_geometry::PinholeCameraModel projector_model_;
+
+  int threshold_h_low_;
+  int threshold_h_hi_;
+  int threshold_s_low_;
+  int threshold_s_hi_;
+  int threshold_v_low_;
+  int threshold_v_hi_;
+
+  int closing_element_size_;
+  int opening_element_size_;
+
+  int canny_first_threshold_;
+  int canny_second_threshold_;
 
   void stereoImageCallback(
       const sensor_msgs::ImageConstPtr& l_image_msg,
       const sensor_msgs::ImageConstPtr& r_image_msg,
       const sensor_msgs::CameraInfoConstPtr& l_info_msg,
       const sensor_msgs::CameraInfoConstPtr& r_info_msg);
+
+  cv::Mat createElement(int element_size);
 
   boost::shared_ptr<ValveTracker> vt_;
 };
