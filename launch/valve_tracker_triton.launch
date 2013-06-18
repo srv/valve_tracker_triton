@@ -1,0 +1,23 @@
+<launch>
+
+  <node pkg="valve_tracker_triton" type="valve_tracker_node" name="valve_tracker" output="screen">
+    <param name="threshold_h_low" value="7"/>
+    <param name="threshold_h_hi" value="236"/>
+    <param name="threshold_s_low" value="32"/>
+    <param name="threshold_s_hi" value="255"/>
+    <param name="threshold_v_low" value="100"/>
+    <param name="threshold_v_hi" value="255"/>
+    <param name="closing_element_size" value="4"/>
+    <param name="opening_element_size" value="6"/>
+    <param name="canny_first_threshold" value="100"/>
+    <param name="canny_second_threshold" value="150"/>
+    <param name="epipolar_width_threshold" value="3"/>
+    <param name="show_debug_images" value="0"/>
+
+    <remap from="stereo" to="stereo_down"/>
+    <remap from="image" to="image_rect_color"/>
+
+  </node>
+
+
+</launch>
