@@ -13,7 +13,7 @@
 #include <image_transport/image_transport.h>
 #include <image_transport/camera_subscriber.h>
 #include <tf/transform_listener.h>
-#include "stereo_processor.h"
+#include "valve_tracker_triton/stereo_processor.h"
 
 namespace valve_tracker
 {
