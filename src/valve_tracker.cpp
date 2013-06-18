@@ -1,5 +1,5 @@
 #include "valve_tracker.h"
-
+#include "utils.h"
 #include <sensor_msgs/image_encodings.h>
 #include <cv_bridge/cv_bridge.h>
 #include <tf/transform_broadcaster.h>
@@ -16,12 +16,14 @@ bool sort_points_x(const cv::Point2d& p1,const cv::Point2d& p2)
   return (p1.x < p2.x);
 }
 
-
-ValveTracker::ValveTracker(const std::string transport) : StereoImageProcessor(transport)
+/** \brief ValveTracker constructor
+  * \param transport
+  */
+valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoImageProcessor(transport)
 {
   ROS_INFO_STREAM("[ValveTracker:] Instantiating the Valve Tracker...");
 
-  // get all the params out!
+  // Get all the params out!
   ros::NodeHandle nhp("~");
   nhp.param("stereo_frame_id", stereo_frame_id_, std::string("/stereo_down"));
   nhp.param("base_link_frame_id", valve_frame_id_, std::string("/valve"));
@@ -42,7 +44,7 @@ ValveTracker::ValveTracker(const std::string transport) : StereoImageProcessor(t
                   "  stereo_frame_id    = " << stereo_frame_id_ << std::endl <<
                   "  valve_frame_id = " << valve_frame_id_ << std::endl);
 
-  // image publisher for future debug
+  // Image publisher for future debug
   image_transport::ImageTransport it(nhp);
   image_pub_  = it.advertise("image_detections", 1);
 
@@ -63,16 +65,21 @@ ValveTracker::ValveTracker(const std::string transport) : StereoImageProcessor(t
   }
 }
 
-
-void ValveTracker::stereoImageCallback(
+/** \brief Stereo Image Callback
+  * \param l_image_msg message of the left image
+  * \param r_image_msg message of the right image
+  * \param l_info_msg information message of the left image
+  * \param r_info_msg information message of the right image
+  */
+void valve_tracker::ValveTracker::stereoImageCallback(
   const sensor_msgs::ImageConstPtr     & l_image_msg,
   const sensor_msgs::ImageConstPtr     & r_image_msg,
   const sensor_msgs::CameraInfoConstPtr& l_info_msg,
   const sensor_msgs::CameraInfoConstPtr& r_info_msg)
 {
+  // Images to opencv
   cv_bridge::CvImagePtr l_cv_image_ptr;
   cv_bridge::CvImagePtr r_cv_image_ptr;
-
   try
   {
     l_cv_image_ptr = cv_bridge::toCvCopy(l_image_msg,
@@ -86,20 +93,28 @@ void ValveTracker::stereoImageCallback(
     return;
   }
 
+  // Get the camera model
   stereo_model_.fromCameraInfo(l_info_msg, r_info_msg);
 
-  // reserve memory for points
+  // Reserve memory for points
   points_.clear();
   points_.resize(2);
   points3d_.clear();
 
-  process(l_cv_image_ptr->image, LEFT);
-  process(r_cv_image_ptr->image, RIGHT);
+  // Detect valve in both images
+  valveDetection(l_cv_image_ptr->image, LEFT);
+  valveDetection(r_cv_image_ptr->image, RIGHT);
   
+  // Compute the 3D points of the valve
   triangulatePoints();
 
-  tf::Transform cameraToValve = fitModel();
+  // Compute the transformation from camera to valve
+  tf::Transform cameraToValve = estimateTransform();
 
+  // Show the tf
+  valve_tracker::Utils::showTf(cameraToValve);
+
+  // Publish processed image
   if (image_pub_.getNumSubscribers() > 0)
   {
     cv_bridge::CvImagePtr cv_ptr(new cv_bridge::CvImage);
@@ -109,19 +124,22 @@ void ValveTracker::stereoImageCallback(
   }
 }
 
-void ValveTracker::process(cv::Mat img, int type)
+/** \brief Detect the valve into the image
+  * \param image where the valve will be detected
+  */
+void valve_tracker::ValveTracker::valveDetection(cv::Mat img, int type)
 {
 
   cv::Mat hsv_img(img.size(), CV_8UC3);
   
-  // convert to HSV color space
+  // Convert to HSV color space
   cv::cvtColor(img, hsv_img, CV_BGR2HSV);
 
   cv::Mat hue_img(img.size(), CV_8UC1);
   cv::Mat sat_img(img.size(), CV_8UC1);
   cv::Mat val_img(img.size(), CV_8UC1);
 
-  // copy the channels to their respective cv::Mat array
+  // Copy the channels to their respective cv::Mat array
   int from_h[] = {0, 0};
   int from_s[] = {1, 0};
   int from_v[] = {2, 0};
@@ -133,7 +151,7 @@ void ValveTracker::process(cv::Mat img, int type)
   cv::Mat sat_img_low, sat_img_hi;
   cv::Mat val_img_low, val_img_hi;
 
-  // threshold those spaces
+  // Threshold those spaces
   cv::threshold(hue_img, hue_img_low, threshold_h_low_, 255, cv::THRESH_BINARY); // threshold binary
   cv::threshold(sat_img, sat_img_low, threshold_s_low_, 255, cv::THRESH_BINARY);
   cv::threshold(val_img, val_img_low, threshold_v_low_, 255, cv::THRESH_BINARY);
@@ -151,14 +169,14 @@ void ValveTracker::process(cv::Mat img, int type)
   cv::bitwise_and(hue_img, sat_img, output_img);
   //cv::bitwise_and(val_img, output_img, output_img);
   
-  // morphology closing
-  cv::Mat element_closing = createElement(closing_element_size_);
-  cv::Mat element_opening = createElement(opening_element_size_);
+  // Morphology closing
+  cv::Mat element_closing = valve_tracker::Utils::createElement(closing_element_size_);
+  cv::Mat element_opening = valve_tracker::Utils::createElement(opening_element_size_);
 
   cv::morphologyEx(output_img, output_img, cv::MORPH_OPEN, element_opening);
   cv::morphologyEx(output_img, output_img, cv::MORPH_CLOSE, element_closing);
 
-  // detect blobs in image
+  // Detect blobs in image
   cv::Mat canny_output;
   std::vector<std::vector<cv::Point> > contours;
   std::vector<cv::Vec4i> hierarchy;
@@ -172,7 +190,7 @@ void ValveTracker::process(cv::Mat img, int type)
     //cv::drawContours( output_img, contours, i, color, 2, 8, hierarchy, 0, cv::Point() );
     //std::cout << "New row " << contours[i] << std::endl;
 
-    // calculate mean points
+    // Calculate mean points
     double u_mean = 0;
     double v_mean = 0;
     for (size_t j = 0; j < contours[i].size(); j++)
@@ -184,14 +202,16 @@ void ValveTracker::process(cv::Mat img, int type)
     v_mean /= contours[i].size();
     cv::Point mean_point(u_mean, v_mean);
 
-    // draw mean points
+    // Draw mean points
     cv::circle( output_img, mean_point, 15, cv::Scalar(127,127,127), 2);
 
     points_[type].push_back(mean_point);
 
   }
 
-  if(show_debug_images_ && !type){
+  // Show debug images for training
+  if(show_debug_images_ && !type)
+  {
     cv::imshow("hue", hue_img);
     cv::imshow("sat", sat_img);
     //cv::imshow("val", val_img);
@@ -202,16 +222,11 @@ void ValveTracker::process(cv::Mat img, int type)
   }
 }
 
-cv::Mat ValveTracker::createElement(int element_size)
+/** \brief Triangulate the 3D points of the valve
+  */
+void valve_tracker::ValveTracker::triangulatePoints()
 {
-  cv::Mat element = cv::Mat::zeros(element_size, element_size, CV_8UC1);
-  cv::circle(element, cv::Point(element_size / 2, element_size / 2), element_size / 2, cv::Scalar(255), -1);
-  return element;
-}
-
-void ValveTracker::triangulatePoints()
-{
-  // look in y the ones in the same epipolar line
+  // Look in y the ones in the same epipolar line
   for (size_t i = 0; i < points_[LEFT].size(); i++)
   { 
     std::vector<cv::Point2d> correspondences;
@@ -225,7 +240,7 @@ void ValveTracker::triangulatePoints()
       // find min distance to another point
     }
 
-    // loop all correspondences and look for the
+    // Loop all correspondences and look for the
     // order of appearance
     if (correspondences.size() == 1)
     {
@@ -249,7 +264,7 @@ void ValveTracker::triangulatePoints()
         }
       }
 
-      // get all the right points in the same epipolar
+      // Get all the right points in the same epipolar
       for (size_t jj=0; jj<points_[RIGHT].size(); jj++)
       { 
         cv::Point2d pr(points_[RIGHT][jj]);
@@ -260,7 +275,7 @@ void ValveTracker::triangulatePoints()
         }
       }
       
-      // sort them and assign correspondences
+      // Sort them and assign correspondences
       std::sort(left_points.begin(), left_points.end(), sort_points_x);
       std::sort(right_points.begin(), right_points.end(), sort_points_x);
 
@@ -269,7 +284,7 @@ void ValveTracker::triangulatePoints()
       unsigned int idx = it - left_points.begin();
       if(idx < left_points.size())
       {
-        // we've correctly found the item. Get the same position point
+        // We've correctly found the item. Get the same position point
         // from right points
         cv::Point3d p;
         cv::Point2d pr(right_points[idx]);
@@ -279,14 +294,17 @@ void ValveTracker::triangulatePoints()
       }
       else
       {
-        // it has not been found
+        // It has not been found
         ROS_WARN("[ValveTracker:] Correspondence could not be found.");
       }
     }
   }
 }
 
-tf::Transform ValveTracker::fitModel()
+/** \brief Detect the valve into the image
+  * @return the transformation between the camera and valve.
+  */
+tf::Transform valve_tracker::ValveTracker::estimateTransform()
 {
   // Sanity check
   if (points3d_.size() != 3)
@@ -311,13 +329,13 @@ tf::Transform ValveTracker::fitModel()
   cv::Mat dst(1, 4, CV_32FC3);
 
   // Compute target root point
-  double distance = distCamera2Point(points3d_[0]);
+  double distance = valve_tracker::Utils::euclideanDist(points3d_[0]);
   int idx = 0;
   for (unsigned int i=1; i<points3d_.size(); i++)
   {
-    if(distCamera2Point(points3d_[i]) > distance)
+    if(valve_tracker::Utils::euclideanDist(points3d_[i]) > distance)
     {
-      distance = distCamera2Point(points3d_[i]);
+      distance = valve_tracker::Utils::euclideanDist(points3d_[i]);
       idx = i;
     }
   }
@@ -348,40 +366,5 @@ tf::Transform ValveTracker::fitModel()
   std::vector<uchar> outliers;
   cv::estimateAffine3D(src, dst, aff_tf, outliers);
 
-  return mat2tf(aff_tf);
-}
-
-double ValveTracker::distCamera2Point(cv::Point3d point)
-{
-  return sqrt(point.x*point.x + point.y*point.y + point.z*point.z);
-}
-
-tf::Transform ValveTracker::mat2tf(cv::Mat input)
-{
-  tf::Matrix3x3 rot(input.at<double>(0,0),
-                    input.at<double>(0,1),
-                    input.at<double>(0,2),
-                    input.at<double>(1,0),
-                    input.at<double>(1,1),
-                    input.at<double>(1,2),
-                    input.at<double>(2,0),
-                    input.at<double>(2,1),
-                    input.at<double>(2,2));
-  tf::Vector3 trans(input.at<double>(0,3), 
-                    input.at<double>(1,3), 
-                    input.at<double>(2,3));
-  tf::Transform output(rot, trans); 
-  return output;   
-}
-
-void ValveTracker::drawTf(tf::Transform input)
-{
-  tf::Vector3 tran = input.getOrigin();
-  tf::Matrix3x3 rot = input.getBasis();
-  tf::Vector3 r0 = rot.getRow(0);
-  tf::Vector3 r1 = rot.getRow(1);
-  tf::Vector3 r2 = rot.getRow(2);
-  ROS_INFO_STREAM("[ValveTracker:]\n" << r0.x() << ", " << r0.y() << ", " << r0.z() << ", " << tran.x() <<
-                  "\n" << r1.x() << ", " << r1.y() << ", " << r1.z() << ", " << tran.y() <<
-                  "\n" << r2.x() << ", " << r2.y() << ", " << r2.z() << ", " << tran.z());
+  return valve_tracker::Utils::mat2tf(aff_tf);
 }

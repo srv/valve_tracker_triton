@@ -20,7 +20,7 @@ int main(int argc, char** argv)
   }
 
   std::string transport = argc > 1 ? argv[1] : "raw";
-  ValveTracker vt_node(transport);
+  valve_tracker::ValveTracker vt_node(transport);
   ros::spin();
   return 0;
 }
