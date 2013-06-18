@@ -14,7 +14,7 @@ public:
 
 
   ValveTracker(const std::string transport);
-  bool process(cv::Mat img);
+  bool process(cv::Mat img, int type);
 
 protected:
   std::string stereo_frame_id_;
@@ -43,6 +43,13 @@ private:
   int canny_first_threshold_;
   int canny_second_threshold_;
 
+  int epipolar_width_threshold_;
+  
+  int show_debug_images_;
+
+  std::vector<std::vector<cv::Point2d> > points_;
+  std::vector<cv::Point3d > points3d_;
+
   void stereoImageCallback(
       const sensor_msgs::ImageConstPtr& l_image_msg,
       const sensor_msgs::ImageConstPtr& r_image_msg,
@@ -50,6 +57,9 @@ private:
       const sensor_msgs::CameraInfoConstPtr& r_info_msg);
 
   cv::Mat createElement(int element_size);
+  void triangulatePoints(void);
+  
+  //static bool sort_points_x(const cv::Point2d& p1, const cv::Point2d& p2);
 
   boost::shared_ptr<ValveTracker> vt_;
 };
