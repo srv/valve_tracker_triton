@@ -14,6 +14,9 @@
     <param name="epipolar_width_threshold" value="3"/>
     <param name="show_debug_images" value="0"/>
 
+    <!-- Load model -->
+    <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />
+
     <remap from="stereo" to="stereo_down"/>
     <remap from="image" to="image_rect_color"/>
 
