@@ -60,7 +60,7 @@ private:
       const sensor_msgs::CameraInfoConstPtr& r_info_msg); //!> Image callback
 
   void valveDetection(cv::Mat img, int type);             //!> Valve detection
-  void triangulatePoints();                               //!> Valve points triangulization
+  bool triangulatePoints();                               //!> Valve points triangulization
   tf::Transform estimateTransform();                      //!> Transform estimation
   
 };

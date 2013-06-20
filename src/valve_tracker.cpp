@@ -44,10 +44,11 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   image_pub_  = it.advertise("image_detections", 1);
 
   // OpenCV image windows for debugging
-  if(show_debug_images_){
-    cv::namedWindow("Valve Tracker", 1);
-    cv::namedWindow("hue", 1);
-    cv::namedWindow("sat", 1);
+  if(show_debug_images_)
+  {
+    cv::namedWindow("Valve Tracker", 0);
+    cv::namedWindow("hue", 0);
+    cv::namedWindow("sat", 0);
     //cv::namedWindow("val", 1);
     cv::createTrackbar("H low", "Valve Tracker", &threshold_h_low_, 255);
     cv::createTrackbar("H hi", "Valve Tracker", &threshold_h_hi_, 255);
@@ -72,6 +73,7 @@ void valve_tracker::ValveTracker::stereoImageCallback(
   const sensor_msgs::CameraInfoConstPtr& l_info_msg,
   const sensor_msgs::CameraInfoConstPtr& r_info_msg)
 {
+
   // Images to opencv
   cv_bridge::CvImagePtr l_cv_image_ptr;
   cv_bridge::CvImagePtr r_cv_image_ptr;
@@ -101,12 +103,16 @@ void valve_tracker::ValveTracker::stereoImageCallback(
   valveDetection(r_cv_image_ptr->image, RIGHT);
   
   // Compute the 3D points of the valve
-  triangulatePoints();
+  if(triangulatePoints())
+  {
+    // Compute the transformation from camera to valve
+    tf::Transform cameraToValve = estimateTransform();
 
-  // Compute the transformation from camera to valve
-  tf::Transform cameraToValve = estimateTransform();
-
-  //valve_tracker::Utils::showTf(cameraToValve);
+    // Publish transform
+    tf_broadcaster_.sendTransform(
+        tf::StampedTransform(cameraToValve, l_image_msg->header.stamp,
+        stereo_frame_id_, valve_frame_id_));
+  }  
 
   // Publish processed image
   if (image_pub_.getNumSubscribers() > 0)
@@ -116,11 +122,6 @@ void valve_tracker::ValveTracker::stereoImageCallback(
     cv_ptr->encoding = "mono8";
     image_pub_.publish(cv_ptr->toImageMsg());
   }
-
-  // Publish transform
-  tf_broadcaster_.sendTransform(
-      tf::StampedTransform(cameraToValve, l_image_msg->header.stamp,
-      stereo_frame_id_, valve_frame_id_));
 }
 
 /** \brief Detect the valve into the image
@@ -223,8 +224,16 @@ void valve_tracker::ValveTracker::valveDetection(cv::Mat img, int type)
 
 /** \brief Triangulate the 3D points of the valve
   */
-void valve_tracker::ValveTracker::triangulatePoints()
+bool valve_tracker::ValveTracker::triangulatePoints()
 {
+  // Sanity check
+  if (points_[LEFT].size() != 3 || points_[LEFT].size() != 3)
+  {
+    ROS_WARN_STREAM(  "[ValveTracker:] Incorrect number of points found (" << 
+                      points_[LEFT].size() << " points) 3 needed.");
+    return false;
+  }
+
   // Look in y the ones in the same epipolar line
   for (size_t i = 0; i < points_[LEFT].size(); i++)
   { 
@@ -246,7 +255,7 @@ void valve_tracker::ValveTracker::triangulatePoints()
       cv::Point3d p;
       stereo_model_.projectDisparityTo3d(pl, pl.x-correspondences[0].x, p);
       points3d_.push_back(p);
-      ROS_DEBUG("[ValveTracker:] 3d point added");
+      ROS_INFO("[ValveTracker:] 3D points added!");
     }
     else
     {
@@ -281,6 +290,7 @@ void valve_tracker::ValveTracker::triangulatePoints()
       std::vector<cv::Point2d>::iterator it;
       it = std::find(left_points.begin(), left_points.end(), pl);
       unsigned int idx = it - left_points.begin();
+
       if(idx < left_points.size())
       {
         // We've correctly found the item. Get the same position point
@@ -289,7 +299,7 @@ void valve_tracker::ValveTracker::triangulatePoints()
         cv::Point2d pr(right_points[idx]);
         stereo_model_.projectDisparityTo3d(pl, pl.x-pr.x, p);
         points3d_.push_back(p);
-        ROS_DEBUG("[ValveTracker:] Correspondence solved!");
+        ROS_INFO("[ValveTracker:] Correspondence solved!");
       }
       else
       {
@@ -298,6 +308,8 @@ void valve_tracker::ValveTracker::triangulatePoints()
       }
     }
   }
+
+  return true;
 }
 
 /** \brief Detect the valve into the image
