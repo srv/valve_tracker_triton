@@ -53,7 +53,7 @@ namespace valve_tracker
 		  * @return the corresponding transform
 		  * \param input is the cv::Mat to be converted
 		  */
-		static tf::Transform mat2tf(cv::Mat input)
+		static tf::Transform cvmat2tf(cv::Mat input)
 		{
 		  tf::Matrix3x3 rot(input.at<double>(0,0),
 		                    input.at<double>(0,1),
@@ -67,7 +67,7 @@ namespace valve_tracker
 		  tf::Vector3 trans(input.at<double>(0,3), 
 		                    input.at<double>(1,3), 
 		                    input.at<double>(2,3));
-		  tf::Transform output(rot, trans); 
+		  tf::Transform output(rot, trans);
 		  return output;   
 		}
 

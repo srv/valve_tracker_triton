@@ -1,14 +1,15 @@
-#include "valve_tracker_triton/valve_tracker.h"
-#include "valve_tracker_triton/utils.h"
+#include "valve_tracker/valve_tracker.h"
+#include "valve_tracker/utils.h"
 #include <sensor_msgs/image_encodings.h>
 #include <cv_bridge/cv_bridge.h>
 #include <tf/transform_broadcaster.h>
 #include <Eigen/Eigen>
 #include "opencv2/core/core.hpp"
-#include "opencv2/calib3d/calib3d.hpp"
 
 #define LEFT 0
 #define RIGHT 1
+
+using namespace std;
 
 /** \brief ValveTracker constructor
   * \param transport
@@ -105,8 +106,7 @@ void valve_tracker::ValveTracker::stereoImageCallback(
   // Compute the transformation from camera to valve
   tf::Transform cameraToValve = estimateTransform();
 
-  // Show the tf
-  valve_tracker::Utils::showTf(cameraToValve);
+  //valve_tracker::Utils::showTf(cameraToValve);
 
   // Publish processed image
   if (image_pub_.getNumSubscribers() > 0)
@@ -116,6 +116,11 @@ void valve_tracker::ValveTracker::stereoImageCallback(
     cv_ptr->encoding = "mono8";
     image_pub_.publish(cv_ptr->toImageMsg());
   }
+
+  // Publish transform
+  tf_broadcaster_.sendTransform(
+      tf::StampedTransform(cameraToValve, l_image_msg->header.stamp,
+      stereo_frame_id_, valve_frame_id_));
 }
 
 /** \brief Detect the valve into the image
@@ -239,9 +244,9 @@ void valve_tracker::ValveTracker::triangulatePoints()
     if (correspondences.size() == 1)
     {
       cv::Point3d p;
-      stereo_model_.projectDisparityTo3d(pl, pl.x-correspondences[0].x,p);
+      stereo_model_.projectDisparityTo3d(pl, pl.x-correspondences[0].x, p);
       points3d_.push_back(p);
-      ROS_INFO("[ValveTracker:] 3d point added");
+      ROS_DEBUG("[ValveTracker:] 3d point added");
     }
     else
     {
@@ -284,7 +289,7 @@ void valve_tracker::ValveTracker::triangulatePoints()
         cv::Point2d pr(right_points[idx]);
         stereo_model_.projectDisparityTo3d(pl, pl.x-pr.x, p);
         points3d_.push_back(p);
-        ROS_INFO("[ValveTracker:] Correspondence solved!");
+        ROS_DEBUG("[ValveTracker:] Correspondence solved!");
       }
       else
       {
@@ -312,53 +317,100 @@ tf::Transform valve_tracker::ValveTracker::estimateTransform()
     return output;
   }
 
-  // Source (model) points
-  cv::Mat src(1, 4, CV_32FC3);
-  src.ptr<cv::Point3f>()[0] = cv::Point3f( 0.0, 0.0, 0.0 );
-  src.ptr<cv::Point3f>()[1] = cv::Point3f( -0.04, 0.0, 0.0 );
-  src.ptr<cv::Point3f>()[2] = cv::Point3f( 0.04, 0.0, 0.0 );
-  src.ptr<cv::Point3f>()[3] = cv::Point3f( 0.0, 0.0, 0.085 );
+  // Model
+  std::vector<cv::Point3f> mdl;
+  mdl.push_back(cv::Point3f( 0.0, 0.0, 0.0 ));
+  mdl.push_back(cv::Point3f( -0.04, 0.0, 0.0 ));
+  mdl.push_back(cv::Point3f( 0.04, 0.0, 0.0 ));
+  mdl.push_back(cv::Point3f( 0.0, 0.0, 0.085 ));
 
-  // Target (real valve) points
-  cv::Mat dst(1, 4, CV_32FC3);
+  // Target
+  std::vector<cv::Point3f> tgt;
 
   // Compute target root point
   double distance = valve_tracker::Utils::euclideanDist(points3d_[0]);
-  int idx = 0;
+  int idx_root = 0;
   for (unsigned int i=1; i<points3d_.size(); i++)
   {
     if(valve_tracker::Utils::euclideanDist(points3d_[i]) > distance)
     {
       distance = valve_tracker::Utils::euclideanDist(points3d_[i]);
-      idx = i;
+      idx_root = i;
     }
   }
-  dst.ptr<cv::Point3f>()[3] = cv::Point3f( points3d_[idx].x, points3d_[idx].y, points3d_[idx].z );
 
   // Compute target central point
   static const int arr[] = {0, 1, 2};
   std::vector<int> v (arr, arr + sizeof(arr) / sizeof(arr[0]));
-  v.erase(v.begin() + idx);
-  dst.ptr<cv::Point3f>()[0] = cv::Point3f( (points3d_[v[0]].x + points3d_[v[1]].x) / 2,
-                                   (points3d_[v[0]].y + points3d_[v[1]].y) / 2,
-                                   (points3d_[v[0]].z + points3d_[v[1]].z) / 2);
+  v.erase(v.begin() + idx_root);
+  tgt.push_back(cv::Point3f( (points3d_[v[0]].x + points3d_[v[1]].x) / 2,
+                             (points3d_[v[0]].y + points3d_[v[1]].y) / 2,
+                             (points3d_[v[0]].z + points3d_[v[1]].z) / 2));
 
   // Find the valve symmetrical sides
   if (points3d_[v[0]].x < points3d_[v[1]].x)
   {
-    dst.ptr<cv::Point3f>()[1] = cv::Point3f( points3d_[v[0]].x, points3d_[v[0]].y, points3d_[v[0]].z );
-    dst.ptr<cv::Point3f>()[2] = cv::Point3f( points3d_[v[1]].x, points3d_[v[1]].y, points3d_[v[1]].z );
+    tgt.push_back(cv::Point3f( points3d_[v[0]].x, points3d_[v[0]].y, points3d_[v[0]].z ));
+    tgt.push_back(cv::Point3f( points3d_[v[1]].x, points3d_[v[1]].y, points3d_[v[1]].z ));
   }
   else
   {
-    dst.ptr<cv::Point3f>()[1] = cv::Point3f( points3d_[v[1]].x, points3d_[v[1]].y, points3d_[v[1]].z );
-    dst.ptr<cv::Point3f>()[2] = cv::Point3f( points3d_[v[0]].x, points3d_[v[0]].y, points3d_[v[0]].z );
+    tgt.push_back(cv::Point3f( points3d_[v[1]].x, points3d_[v[1]].y, points3d_[v[1]].z ));
+    tgt.push_back(cv::Point3f( points3d_[v[0]].x, points3d_[v[0]].y, points3d_[v[0]].z ));
   }
 
-  // Compute the 3D affine transformation
-  cv::Mat aff_tf;
-  std::vector<uchar> outliers;
-  cv::estimateAffine3D(src, dst, aff_tf, outliers);
+  tgt.push_back(cv::Point3f( points3d_[idx_root].x, points3d_[idx_root].y, points3d_[idx_root].z ));
 
-  return valve_tracker::Utils::mat2tf(aff_tf);
+  // Compute centroids
+  Eigen::Vector3f centroid_mdl(0.0, 0.0, 0.0);
+  Eigen::Vector3f centroid_tgt(0.0, 0.0, 0.0);
+  for (unsigned int i=0; i<mdl.size(); i++)
+  {
+    centroid_mdl(0) += mdl[i].x;
+    centroid_mdl(1) += mdl[i].y;
+    centroid_mdl(2) += mdl[i].z;
+    centroid_tgt(0) += tgt[i].x;
+    centroid_tgt(1) += tgt[i].y;
+    centroid_tgt(2) += tgt[i].z;
+  }
+  centroid_mdl /= mdl.size();
+  centroid_tgt /= tgt.size();
+
+  // Compute H
+  Eigen::Matrix3f H = Eigen::Matrix3f::Zero();
+  for (unsigned int i=0; i<mdl.size(); i++)
+  {
+    Eigen::Vector3f p_mdl(mdl[i].x, mdl[i].y, mdl[i].z);
+    Eigen::Vector3f p_tgt(tgt[i].x, tgt[i].y, tgt[i].z);
+
+    Eigen::Vector3f v_mdl = p_mdl - centroid_mdl;
+    Eigen::Vector3f v_tgt = p_tgt - centroid_tgt;
+
+    H += v_mdl * v_tgt.transpose();
+  }
+ 
+  // Pseudo inverse
+  Eigen::JacobiSVD<Eigen::Matrix3f> svdOfH(H, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  Eigen::Matrix3f u_svd = svdOfH.matrixU ();
+  Eigen::Matrix3f v_svd = svdOfH.matrixV ();
+  
+  // Compute R = V * U'
+  if (u_svd.determinant () * v_svd.determinant () < 0)
+  {
+    for (int x = 0; x < 3; ++x)
+      v_svd (x, 2) *= -1;
+  }
+  Eigen::Matrix3f R = v_svd * u_svd.transpose ();
+
+  // Compute translation
+  Eigen::Vector3f t = -R * centroid_mdl + centroid_tgt;
+
+  // Build the tf
+  tf::Matrix3x3 rot(R(0,0), R(0,1), R(0,2),
+                    R(1,0), R(1,1), R(1,2),
+                    R(2,0), R(2,1), R(2,2));
+  tf::Vector3 trans(t(0), t(1), t(2));
+  tf::Transform output(rot, trans);
+
+  return output;
 }

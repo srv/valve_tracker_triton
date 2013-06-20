@@ -13,7 +13,8 @@
 #include <image_transport/image_transport.h>
 #include <image_transport/camera_subscriber.h>
 #include <tf/transform_listener.h>
-#include "valve_tracker_triton/stereo_processor.h"
+#include <tf/transform_broadcaster.h>
+#include "valve_tracker/stereo_processor.h"
 
 namespace valve_tracker
 {
@@ -43,6 +44,8 @@ private:
   int canny_second_threshold_;
   int epipolar_width_threshold_;
   int show_debug_images_;
+
+  tf::TransformBroadcaster tf_broadcaster_;         //!> Transforms
 
   cv::Mat processed_;                               //!> Processed image
   image_geometry::StereoCameraModel stereo_model_;  //!> Camera model to compute the 3d world points

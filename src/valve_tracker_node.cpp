@@ -1,4 +1,4 @@
-#include "valve_tracker_triton/valve_tracker.h"
+#include "valve_tracker/valve_tracker.h"
 
 int main(int argc, char** argv)
 {
