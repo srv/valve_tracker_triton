@@ -6,10 +6,7 @@
 #include <Eigen/Eigen>
 #include "opencv2/core/core.hpp"
 
-#define LEFT 0
-#define RIGHT 1
-
-using namespace std;
+#define PI 3.14159265
 
 /** \brief ValveTracker constructor
   * \param transport
@@ -21,7 +18,7 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   // Get all the params out!
   ros::NodeHandle nhp("~");
   nhp.param("stereo_frame_id", stereo_frame_id_, std::string("/stereo_down"));
-  nhp.param("base_link_frame_id", valve_frame_id_, std::string("/valve"));
+  nhp.param("valve_frame_id", valve_frame_id_, std::string("/valve"));
   nhp.param("threshold_h_low", threshold_h_low_, 0);
   nhp.param("threshold_h_hi", threshold_h_hi_, 255);
   nhp.param("threshold_s_low", threshold_s_low_, 0);
@@ -32,33 +29,29 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   nhp.param("opening_element_size", opening_element_size_, 255);
   nhp.param("canny_first_threshold", canny_first_threshold_, 100);
   nhp.param("canny_second_threshold", canny_second_threshold_, 110);
-  nhp.param("epipolar_width_threshold",epipolar_width_threshold_, 3);
-  nhp.param("show_debug_images",show_debug_images_, 0);
+  nhp.param("epipolar_width_threshold", epipolar_width_threshold_, 3);
 
-  ROS_INFO_STREAM("[ValveTracker:] Valve Tracker Settings:" << std::endl <<
-                  "  stereo_frame_id    = " << stereo_frame_id_ << std::endl <<
-                  "  valve_frame_id = " << valve_frame_id_ << std::endl);
+  // Load the model
+  XmlRpc::XmlRpcValue model;
+  int cols, rows;
+  nhp.getParam("model_matrix/cols", cols);
+  nhp.getParam("model_matrix/rows", rows);
+  nhp.getParam("model_matrix/data", model);
+  ROS_ASSERT(model.getType() == XmlRpc::XmlRpcValue::TypeArray);
+  ROS_ASSERT(model.size() == cols*rows);
+  for (int i=0; i<model.size(); i=i+3)
+  {
+    ROS_ASSERT(model[i].getType() == XmlRpc::XmlRpcValue::TypeDouble);
+    cv::Point3f p((double)model[i], (double)model[i+1], (double)model[i+2]);
+    mdl_.push_back(p);
+  }
 
   // Image publisher for future debug
   image_transport::ImageTransport it(nhp);
   image_pub_  = it.advertise("image_detections", 1);
 
-  // OpenCV image windows for debugging
-  if(show_debug_images_)
-  {
-    cv::namedWindow("Valve Tracker", 0);
-    cv::namedWindow("hue", 0);
-    cv::namedWindow("sat", 0);
-    //cv::namedWindow("val", 1);
-    cv::createTrackbar("H low", "Valve Tracker", &threshold_h_low_, 255);
-    cv::createTrackbar("H hi", "Valve Tracker", &threshold_h_hi_, 255);
-    cv::createTrackbar("S low", "Valve Tracker", &threshold_s_low_, 255);
-    cv::createTrackbar("S hi", "Valve Tracker", &threshold_s_hi_, 255);
-    //cv::createTrackbar("V low", "Valve Tracker", &threshold_v_low_, 255);
-    //cv::createTrackbar("V hi", "Valve Tracker", &threshold_v_hi_, 255);
-    cv::createTrackbar("C", "Valve Tracker", &closing_element_size_, 255);
-    cv::createTrackbar("O", "Valve Tracker", &opening_element_size_, 255);
-  }
+  // Initialize the camera to valve transformation
+  camera_to_valve_.setIdentity();
 }
 
 /** \brief Stereo Image Callback
@@ -93,26 +86,30 @@ void valve_tracker::ValveTracker::stereoImageCallback(
   // Get the camera model
   stereo_model_.fromCameraInfo(l_info_msg, r_info_msg);
 
-  // Reserve memory for points
-  points_.clear();
-  points_.resize(2);
-  points3d_.clear();
-
   // Detect valve in both images
-  valveDetection(l_cv_image_ptr->image, LEFT);
-  valveDetection(r_cv_image_ptr->image, RIGHT);
-  
-  // Compute the 3D points of the valve
-  if(triangulatePoints())
-  {
-    // Compute the transformation from camera to valve
-    tf::Transform cameraToValve = estimateTransform();
+  std::vector< std::vector<cv::Point2d> > points_2d;
+  points_2d.push_back(valveDetection(l_cv_image_ptr->image)); // Left  points at idx=0
+  points_2d.push_back(valveDetection(r_cv_image_ptr->image)); // Right points at idx=1
 
-    // Publish transform
-    tf_broadcaster_.sendTransform(
-        tf::StampedTransform(cameraToValve, l_image_msg->header.stamp,
-        stereo_frame_id_, valve_frame_id_));
-  }  
+  // Valve is defined by 3 points
+  if (points_2d[0].size() == 3 || points_2d[1].size() == 3)
+  {
+    // Triangulate the 3D points
+    std::vector<cv::Point3d> points3d;
+    points3d = triangulatePoints(points_2d);
+    
+    // Compute the 3D points of the valve
+    if(points3d.size() == 3)
+    {
+      // Compute the transformation from camera to valve
+      camera_to_valve_ = estimateTransform(points3d);
+    }
+  }
+  else
+  {
+    ROS_WARN_STREAM("[ValveTracker:] Incorrect number of valve points found (" << 
+                    points_2d[0].size() << " points) 3 needed.");
+  }
 
   // Publish processed image
   if (image_pub_.getNumSubscribers() > 0)
@@ -122,13 +119,22 @@ void valve_tracker::ValveTracker::stereoImageCallback(
     cv_ptr->encoding = "mono8";
     image_pub_.publish(cv_ptr->toImageMsg());
   }
+
+  // Publish last computed transform
+  tf_broadcaster_.sendTransform(
+      tf::StampedTransform(camera_to_valve_, l_image_msg->header.stamp,
+      stereo_frame_id_, valve_frame_id_));
 }
 
 /** \brief Detect the valve into the image
+  * @return vector with the detected valve points
   * \param image where the valve will be detected
   */
-void valve_tracker::ValveTracker::valveDetection(cv::Mat img, int type)
+std::vector<cv::Point2d> 
+valve_tracker::ValveTracker::valveDetection(cv::Mat img)
 {
+  // Initialize output
+  std::vector<cv::Point2d> points;
 
   cv::Mat hsv_img(img.size(), CV_8UC3);
   
@@ -167,7 +173,6 @@ void valve_tracker::ValveTracker::valveDetection(cv::Mat img, int type)
   cv::bitwise_and(val_img_low, val_img_hi, val_img);
 
   cv::bitwise_and(hue_img, sat_img, output_img);
-  //cv::bitwise_and(val_img, output_img, output_img);
   
   // Morphology closing
   cv::Mat element_closing = valve_tracker::Utils::createElement(closing_element_size_);
@@ -186,10 +191,6 @@ void valve_tracker::ValveTracker::valveDetection(cv::Mat img, int type)
   
   for (size_t i = 0; i < contours.size(); i++)
   {
-    //cv::Scalar color = cv::Scalar( 255*(i+1)/4, 255*(i+1)/4, 255*(i+1)/4 );
-    //cv::drawContours( output_img, contours, i, color, 2, 8, hierarchy, 0, cv::Point() );
-    //std::cout << "New row " << contours[i] << std::endl;
-
     // Calculate mean points
     double u_mean = 0;
     double v_mean = 0;
@@ -205,47 +206,43 @@ void valve_tracker::ValveTracker::valveDetection(cv::Mat img, int type)
     // Draw mean points
     cv::circle( output_img, mean_point, 15, cv::Scalar(127,127,127), 2);
 
-    points_[type].push_back(mean_point);
-
+    points.push_back(mean_point);
   }
 
-  // Show debug images for training
-  if(show_debug_images_ && !type)
-  {
-    cv::imshow("hue", hue_img);
-    cv::imshow("sat", sat_img);
-    //cv::imshow("val", val_img);
-    cv::imshow("Valve Tracker", output_img);
-    cv::waitKey(3);
+  processed_ = output_img;
 
-    processed_ = output_img;
-  }
+  return points;
 }
 
 /** \brief Triangulate the 3D points of the valve
+  * @return vector with the 3D points of the valve
+  * \param vector of left and right valve point detection
   */
-bool valve_tracker::ValveTracker::triangulatePoints()
+std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
+    std::vector< std::vector<cv::Point2d> > points_2d)
 {
+  // Initialize output
+  std::vector<cv::Point3d> points3d;
+
   // Sanity check
-  if (points_[LEFT].size() != 3 || points_[LEFT].size() != 3)
+  if (points_2d[0].size() != 3 || points_2d[1].size() != 3)
   {
-    ROS_WARN_STREAM(  "[ValveTracker:] Incorrect number of points found (" << 
-                      points_[LEFT].size() << " points) 3 needed.");
-    return false;
+    ROS_WARN_STREAM(  "[ValveTracker:] Incorrect number of valve points found (" << 
+                      points_2d[0].size() << " points) 3 needed.");
+    return points3d;
   }
 
   // Look in y the ones in the same epipolar line
-  for (size_t i = 0; i < points_[LEFT].size(); i++)
-  { 
+  for (size_t i = 0; i < points_2d[0].size(); i++)
+  {
     std::vector<cv::Point2d> correspondences;
-    cv::Point2d pl(points_[LEFT][i]);
-    for (size_t j = 0; j < points_[RIGHT].size(); j++)
+    cv::Point2d pl(points_2d[0][i]);
+    for (size_t j = 0; j < points_2d[1].size(); j++)
     {
-      cv::Point2d pr(points_[RIGHT][j]);
+      cv::Point2d pr(points_2d[1][j]);
       double dist_y = abs(pl.y - pr.y);
-      if (dist_y < epipolar_width_threshold_)
+      if (dist_y <= epipolar_width_threshold_)
         correspondences.push_back(pr);
-      // find min distance to another point
     }
 
     // Loop all correspondences and look for the
@@ -254,35 +251,35 @@ bool valve_tracker::ValveTracker::triangulatePoints()
     {
       cv::Point3d p;
       stereo_model_.projectDisparityTo3d(pl, pl.x-correspondences[0].x, p);
-      points3d_.push_back(p);
-      ROS_INFO("[ValveTracker:] 3D points added!");
+      points3d.push_back(p);
+      ROS_DEBUG("[ValveTracker:] 3D points added!");
     }
-    else
+    else if (correspondences.size() > 1)
     {
       // get all the left points in the same epipolar
       std::vector<cv::Point2d> left_points;
       std::vector<cv::Point2d> right_points;
-      for (size_t ii=0; ii<points_[LEFT].size(); ii++)
+      for (size_t ii=0; ii<points_2d[0].size(); ii++)
       { 
-        cv::Point2d pl2(points_[LEFT][ii]);
+        cv::Point2d pl2(points_2d[0][ii]);
         double dist_y = abs(pl.y - pl2.y);
-        if (dist_y < epipolar_width_threshold_) 
+        if (dist_y <= epipolar_width_threshold_) 
         {
           left_points.push_back(pl2);
         }
       }
 
       // Get all the right points in the same epipolar
-      for (size_t jj=0; jj<points_[RIGHT].size(); jj++)
+      for (size_t jj=0; jj<points_2d[1].size(); jj++)
       { 
-        cv::Point2d pr(points_[RIGHT][jj]);
+        cv::Point2d pr(points_2d[1][jj]);
         double dist_y = abs(pl.y - pr.y);
-        if (dist_y < epipolar_width_threshold_)
+        if (dist_y <= epipolar_width_threshold_)
         {
           right_points.push_back(pr);
         }
       }
-      
+
       // Sort them and assign correspondences
       std::sort(left_points.begin(), left_points.end(), valve_tracker::Utils::sort_points_x);
       std::sort(right_points.begin(), right_points.end(), valve_tracker::Utils::sort_points_x);
@@ -298,8 +295,8 @@ bool valve_tracker::ValveTracker::triangulatePoints()
         cv::Point3d p;
         cv::Point2d pr(right_points[idx]);
         stereo_model_.projectDisparityTo3d(pl, pl.x-pr.x, p);
-        points3d_.push_back(p);
-        ROS_INFO("[ValveTracker:] Correspondence solved!");
+        points3d.push_back(p);
+        ROS_DEBUG("[ValveTracker:] Correspondence solved!");
       }
       else
       {
@@ -307,46 +304,47 @@ bool valve_tracker::ValveTracker::triangulatePoints()
         ROS_WARN("[ValveTracker:] Correspondence could not be found.");
       }
     }
+    else
+    {
+      // It has not been found
+      ROS_WARN_STREAM("[ValveTracker:] 0 correspondences found between left and " <<
+                "right images, consider increasing the parameter 'epipolar_width_threshold'.");
+    }
   }
 
-  return true;
+  return points3d;
 }
 
 /** \brief Detect the valve into the image
   * @return the transformation between the camera and valve.
+  * \param 3D points of the valve.
   */
-tf::Transform valve_tracker::ValveTracker::estimateTransform()
+tf::Transform valve_tracker::ValveTracker::estimateTransform(
+    std::vector<cv::Point3d> points_3d)
 {
   // Sanity check
-  if (points3d_.size() != 3)
+  if (points_3d.size() != 3)
   {
     ROS_WARN_STREAM(  "[ValveTracker:] Impossible to estimate the transformation " << 
                       "between camera and valve, wrong 3d correspondences size: " <<
-                      points3d_.size());
+                      points_3d.size());
 
     tf::Transform output;
     output.setIdentity();
     return output;
   }
 
-  // Model
-  std::vector<cv::Point3f> mdl;
-  mdl.push_back(cv::Point3f( 0.0, 0.0, 0.0 ));
-  mdl.push_back(cv::Point3f( -0.04, 0.0, 0.0 ));
-  mdl.push_back(cv::Point3f( 0.04, 0.0, 0.0 ));
-  mdl.push_back(cv::Point3f( 0.0, 0.0, 0.085 ));
-
-  // Target
+  // Target point cloud
   std::vector<cv::Point3f> tgt;
 
-  // Compute target root point
-  double distance = valve_tracker::Utils::euclideanDist(points3d_[0]);
+  // Get target root point
+  double distance = valve_tracker::Utils::euclideanDist(points_3d[0]);
   int idx_root = 0;
-  for (unsigned int i=1; i<points3d_.size(); i++)
+  for (unsigned int i=1; i<points_3d.size(); i++)
   {
-    if(valve_tracker::Utils::euclideanDist(points3d_[i]) > distance)
+    if(valve_tracker::Utils::euclideanDist(points_3d[i]) > distance)
     {
-      distance = valve_tracker::Utils::euclideanDist(points3d_[i]);
+      distance = valve_tracker::Utils::euclideanDist(points_3d[i]);
       idx_root = i;
     }
   }
@@ -355,44 +353,44 @@ tf::Transform valve_tracker::ValveTracker::estimateTransform()
   static const int arr[] = {0, 1, 2};
   std::vector<int> v (arr, arr + sizeof(arr) / sizeof(arr[0]));
   v.erase(v.begin() + idx_root);
-  tgt.push_back(cv::Point3f( (points3d_[v[0]].x + points3d_[v[1]].x) / 2,
-                             (points3d_[v[0]].y + points3d_[v[1]].y) / 2,
-                             (points3d_[v[0]].z + points3d_[v[1]].z) / 2));
+  tgt.push_back(cv::Point3f( (points_3d[v[0]].x + points_3d[v[1]].x) / 2,
+                             (points_3d[v[0]].y + points_3d[v[1]].y) / 2,
+                             (points_3d[v[0]].z + points_3d[v[1]].z) / 2));
 
   // Find the valve symmetrical sides
-  if (points3d_[v[0]].x < points3d_[v[1]].x)
+  if (points_3d[v[0]].x < points_3d[v[1]].x)
   {
-    tgt.push_back(cv::Point3f( points3d_[v[0]].x, points3d_[v[0]].y, points3d_[v[0]].z ));
-    tgt.push_back(cv::Point3f( points3d_[v[1]].x, points3d_[v[1]].y, points3d_[v[1]].z ));
+    tgt.push_back(cv::Point3f( points_3d[v[0]].x, points_3d[v[0]].y, points_3d[v[0]].z ));
+    tgt.push_back(cv::Point3f( points_3d[v[1]].x, points_3d[v[1]].y, points_3d[v[1]].z ));
   }
   else
   {
-    tgt.push_back(cv::Point3f( points3d_[v[1]].x, points3d_[v[1]].y, points3d_[v[1]].z ));
-    tgt.push_back(cv::Point3f( points3d_[v[0]].x, points3d_[v[0]].y, points3d_[v[0]].z ));
+    tgt.push_back(cv::Point3f( points_3d[v[1]].x, points_3d[v[1]].y, points_3d[v[1]].z ));
+    tgt.push_back(cv::Point3f( points_3d[v[0]].x, points_3d[v[0]].y, points_3d[v[0]].z ));
   }
 
-  tgt.push_back(cv::Point3f( points3d_[idx_root].x, points3d_[idx_root].y, points3d_[idx_root].z ));
+  tgt.push_back(cv::Point3f( points_3d[idx_root].x, points_3d[idx_root].y, points_3d[idx_root].z ));
 
   // Compute centroids
   Eigen::Vector3f centroid_mdl(0.0, 0.0, 0.0);
   Eigen::Vector3f centroid_tgt(0.0, 0.0, 0.0);
-  for (unsigned int i=0; i<mdl.size(); i++)
+  for (unsigned int i=0; i<mdl_.size(); i++)
   {
-    centroid_mdl(0) += mdl[i].x;
-    centroid_mdl(1) += mdl[i].y;
-    centroid_mdl(2) += mdl[i].z;
+    centroid_mdl(0) += mdl_[i].x;
+    centroid_mdl(1) += mdl_[i].y;
+    centroid_mdl(2) += mdl_[i].z;
     centroid_tgt(0) += tgt[i].x;
     centroid_tgt(1) += tgt[i].y;
     centroid_tgt(2) += tgt[i].z;
   }
-  centroid_mdl /= mdl.size();
+  centroid_mdl /= mdl_.size();
   centroid_tgt /= tgt.size();
 
   // Compute H
   Eigen::Matrix3f H = Eigen::Matrix3f::Zero();
-  for (unsigned int i=0; i<mdl.size(); i++)
+  for (unsigned int i=0; i<mdl_.size(); i++)
   {
-    Eigen::Vector3f p_mdl(mdl[i].x, mdl[i].y, mdl[i].z);
+    Eigen::Vector3f p_mdl(mdl_[i].x, mdl_[i].y, mdl_[i].z);
     Eigen::Vector3f p_tgt(tgt[i].x, tgt[i].y, tgt[i].z);
 
     Eigen::Vector3f v_mdl = p_mdl - centroid_mdl;
@@ -417,10 +415,12 @@ tf::Transform valve_tracker::ValveTracker::estimateTransform()
   // Compute translation
   Eigen::Vector3f t = -R * centroid_mdl + centroid_tgt;
 
-  // Build the tf
+  // Build rotation matrix
   tf::Matrix3x3 rot(R(0,0), R(0,1), R(0,2),
                     R(1,0), R(1,1), R(1,2),
                     R(2,0), R(2,1), R(2,2));
+ 
+  // Build the tf
   tf::Vector3 trans(t(0), t(1), t(2));
   tf::Transform output(rot, trans);
 

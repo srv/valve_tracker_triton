@@ -44,14 +44,13 @@ private:
   int canny_second_threshold_;
   int epipolar_width_threshold_;
   int show_debug_images_;
+  std::vector<cv::Point3f> mdl_;
 
-  tf::TransformBroadcaster tf_broadcaster_;         //!> Transforms
+  tf::TransformBroadcaster tf_broadcaster_;         //!> Transform publisher
+  tf::Transform camera_to_valve_;                   //!> Camera to valve transformation
 
   cv::Mat processed_;                               //!> Processed image
   image_geometry::StereoCameraModel stereo_model_;  //!> Camera model to compute the 3d world points
-
-  std::vector< std::vector<cv::Point2d> > points_;  //!> 2D points
-  std::vector<cv::Point3d> points3d_;               //!> 3D world points
 
   void stereoImageCallback(
       const sensor_msgs::ImageConstPtr& l_image_msg,
@@ -59,9 +58,11 @@ private:
       const sensor_msgs::CameraInfoConstPtr& l_info_msg,
       const sensor_msgs::CameraInfoConstPtr& r_info_msg); //!> Image callback
 
-  void valveDetection(cv::Mat img, int type);             //!> Valve detection
-  bool triangulatePoints();                               //!> Valve points triangulization
-  tf::Transform estimateTransform();                      //!> Transform estimation
+  std::vector<cv::Point2d> valveDetection(cv::Mat img);   //!> Valve detection
+  std::vector<cv::Point3d> triangulatePoints(
+    std::vector< std::vector<cv::Point2d> > points_2d);   //!> Valve points triangulization
+  tf::Transform estimateTransform(
+    std::vector<cv::Point3d> points_3d);                  //!> Transform estimation
   
 };
 
