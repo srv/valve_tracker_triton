@@ -46,7 +46,8 @@ private:
   int show_debug_images_;
   std::vector<cv::Point3f> mdl_;
 
-  tf::TransformBroadcaster tf_broadcaster_;         //!> Transforms
+  tf::TransformBroadcaster tf_broadcaster_;         //!> Transform publisher
+  tf::Transform camera_to_valve_;                   //!> Camera to valve transformation
 
   cv::Mat processed_;                               //!> Processed image
   image_geometry::StereoCameraModel stereo_model_;  //!> Camera model to compute the 3d world points
