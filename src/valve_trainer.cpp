@@ -1,0 +1,529 @@
+#include <algorithm>
+#include <cv_bridge/cv_bridge.h>
+
+#include "valve_tracker/valve_trainer.h"
+#include "valve_tracker/utils.h"
+
+using namespace std;
+
+/** \brief ValveTrainer constructor
+  * \param transport
+  */
+valve_tracker::ValveTrainer::ValveTrainer(const std::string transport) : StereoImageProcessor(transport)
+{
+  ROS_INFO_STREAM("[ValveTrainer:] Instantiating the Valve Trainer...");
+
+  // Get all the params out!
+  ros::NodeHandle nhp("~");
+
+  nhp.param("num_hue_bins",num_hue_bins_, 8);
+  nhp.param("num_sat_bins",num_sat_bins_, 8);
+  nhp.param("num_val_bins",num_val_bins_, 8);
+  nhp.param("mean_filter_size",mean_filter_size_, 4);
+  nhp.param("opening_element_size",opening_element_size_, 4);
+  nhp.param("closing_element_size",closing_element_size_, 4);
+  nhp.param("min_value",min_value_, 30);
+
+  ROS_INFO_STREAM("[ValveTrainer:] Valve Trainer Settings:" << std::endl <<
+                  "  num_hue_bins         = " << num_hue_bins_ << std::endl <<
+                  "  num_sat_bins         = " << num_sat_bins_ << std::endl <<
+                  "  num_val_bins         = " << num_val_bins_ << std::endl <<
+                  "  mean_filter_size     = " << mean_filter_size_ << std::endl <<
+                  "  opening_element_size = " << opening_element_size_ << std::endl <<
+                  "  min_value            = " << min_value_ << std::endl);
+
+  // first status: show live video
+  training_status_ = DISPLAY_VIDEO;
+
+  // OpenCV image windows for debugging
+  cv::namedWindow("Training GUI", 0);
+  cv::setMouseCallback("Training GUI", &valve_tracker::ValveTrainer::staticMouseCallback, this);
+}
+
+valve_tracker::ValveTrainer::~ValveTrainer()
+{
+  cv::destroyWindow("Training GUI");
+}
+
+/** \brief Stereo Image Callback
+  * \param l_image_msg message of the left image
+  * \param r_image_msg message of the right image
+  * \param l_info_msg information message of the left image
+  * \param r_info_msg information message of the right image
+  */
+void valve_tracker::ValveTrainer::stereoImageCallback(
+  const sensor_msgs::ImageConstPtr     & l_image_msg,
+  const sensor_msgs::ImageConstPtr     & r_image_msg,
+  const sensor_msgs::CameraInfoConstPtr& l_info_msg,
+  const sensor_msgs::CameraInfoConstPtr& r_info_msg)
+{
+
+  // Images to opencv
+  cv_bridge::CvImagePtr l_cv_image_ptr;
+  cv_bridge::CvImagePtr r_cv_image_ptr;
+  try
+  {
+    l_cv_image_ptr = cv_bridge::toCvCopy(l_image_msg,
+                                         sensor_msgs::image_encodings::BGR8);
+    r_cv_image_ptr = cv_bridge::toCvCopy(r_image_msg,
+                                         sensor_msgs::image_encodings::BGR8);
+  }
+  catch (cv_bridge::Exception& e)
+  {
+    ROS_ERROR("[ValveTrainer:] cv_bridge exception: %s", e.what());
+    return;
+  }
+
+  image = l_cv_image_ptr->image.clone();
+
+  // check where we are
+  switch(training_status_)
+  {
+    case DISPLAY_VIDEO:
+      // show live video
+      ROS_INFO_ONCE("Click on the image to extract one frame.");
+      break;
+    case AWAITING_TRAINING_IMAGE:
+      // save the image for later.
+      training_image_ = image.clone();
+      training_status_ = SHOWING_TRAINING_IMAGE;
+      break;
+    case SHOWING_TRAINING_IMAGE:
+      // waiting user interaction
+      image = training_image_.clone();
+      break;
+    case PAINTING:
+      // undergoing user interaction. nothing to do
+      ROS_INFO_ONCE("Release the mouse button whenever you need.");
+      image = training_image_.clone();
+      break;
+    case ROI_SELECTED:
+      // user interaction ended. 
+      ROS_INFO_ONCE("ROI has been selected. Performing training...");
+      model_histogram_ = train(training_image_);
+      ROS_INFO_ONCE("Training done!");
+      training_status_ = TRAINED;
+      break;
+    case TRAINED:
+      // detect the valve with the training
+      ROS_INFO_ONCE("Trying to detect the valve...");
+      detect(model_histogram_, image);
+      break;
+  }
+
+  if (PAINTING){
+    cv::rectangle(image, roi_rectangle_selection_, cv::Scalar(255,255,255),3);
+  }
+  cv::imshow("Training GUI", image);
+  cv::waitKey(5);
+}
+
+/** \brief Detect the valve into the image
+  * \param image where the valve will be detected
+  * \param type indicates if the image belongs to the left or right camera frame
+  */
+cv::MatND valve_tracker::ValveTrainer::train(const cv::Mat& image)
+{
+
+  cv::Mat hsv_image(image.size(), CV_8UC3);
+  cv::cvtColor(image, hsv_image, CV_BGR2HSV);
+
+  const int bins_hsv[] = {num_hue_bins_, num_sat_bins_, num_val_bins_};
+
+  // Calculate histogram of the target
+  cv::Mat roi(hsv_image, roi_rectangle_selection_);
+  ROS_INFO("Extracting histogram from target...");
+  cv::MatND target_hist = calculateHistogram(roi, bins_hsv, cv::Mat());
+
+  // Calculate the histogram of the background
+  cv::Mat maskroi;
+  maskroi = cv::Mat::zeros(hsv_image.size(), CV_8UC1); 
+  cv::rectangle(maskroi, roi_rectangle_selection_, 255);
+  ROS_INFO("Extracting histogram from background...");
+  cv::MatND background_hist = calculateHistogram(hsv_image, bins_hsv, maskroi);
+
+  //cv::MatND model_histogram = target_hist / background_hist * 255;
+  cv::MatND model_histogram = target_hist;
+  //cv::MatND model_histogram(target_hist.size(), CV_32FC3);
+  float epsilon = 1e-6;
+
+  ROS_INFO("kk");
+
+  for( int h = 0; h < num_hue_bins_; h++ ){
+    for( int s = 0; s < num_sat_bins_; s++ ){
+      for( int v = 0; v < num_val_bins_; v++ ){
+        float target_value = target_hist.at<float>(h,s,v);
+        float background_value = background_hist.at<float>(h,s,v);
+        if (target_value > epsilon){
+          if (background_value > epsilon){
+            model_histogram.at<float>(h,s,v) = target_value / background_value;
+          }else{
+            model_histogram.at<float>(h,s,v) = target_value;
+          }
+        }else{
+          model_histogram.at<float>(h,s,v) = 0;
+        }
+      }
+    }
+  }
+
+  cv::namedWindow("valve-HS-histogram", 0);
+  cv::namedWindow("valve-HV-histogram", 0);
+  showHSVHistogram(model_histogram,"valve-HS-histogram","valve-HV-histogram");
+
+  //TODO: set small saturations and values to zero
+  //TODO: keep only the upper region of the sat and val channels. we want clear and "almost" sharp colors
+
+  printMat(target_hist);
+  std::cout << std::endl;
+  printMat(background_hist);
+  std::cout << std::endl;
+  printMat(model_histogram);
+
+  //double min=0,max=0;
+  //cv::minMaxLoc(hue_img, &min, &max, 0, 0);
+
+  //ROS_INFO_STREAM("Min value: " << min << " Max value: " << max);
+  //ROS_INFO_STREAM("Histogram:\n" << model_histogram);
+
+  return model_histogram;
+}
+
+int valve_tracker::ValveTrainer::detect(const cv::MatND& hist, const cv::Mat& image)
+{
+  
+  if (hist.size[0] != num_hue_bins_ ||
+      hist.size[1] != num_sat_bins_ ||
+      hist.size[2] != num_val_bins_)
+  {
+    ROS_ERROR("[ValveTrainer:] Training data does not fit to actual parameters, you have to re-train with the same parameters!");
+    return -1;
+  }
+
+  cv::Mat hsv_image;
+  cv::cvtColor(image, hsv_image, CV_BGR2HSV);
+
+  cv::Mat backprojection = calculateBackprojection(hsv_image, hist);
+
+  // filter out noise
+  if (mean_filter_size_ > 2)
+  {
+    cv::medianBlur(backprojection, backprojection, mean_filter_size_);
+  }
+
+  // perform thresholding
+  cv::Mat binary;
+  cv::threshold(backprojection, binary, 127, 255, CV_THRESH_BINARY);
+
+  // some opening
+  int element_size = opening_element_size_;
+  cv::Mat element = cv::Mat::zeros(element_size, element_size, CV_8UC1);
+  cv::circle(element, cv::Point(element_size / 2, element_size / 2), element_size / 2, cv::Scalar(255), -1);
+  cv::Mat binary_morphed;
+  cv::morphologyEx(binary, binary_morphed, cv::MORPH_OPEN, element);
+
+  // some closing
+  element_size = closing_element_size_;
+  element = cv::Mat::zeros(element_size, element_size, CV_8UC1);
+  cv::circle(element, cv::Point(element_size / 2, element_size / 2), element_size / 2, cv::Scalar(255), -1);
+  cv::morphologyEx(binary_morphed, binary_morphed, cv::MORPH_CLOSE, element);
+
+  // create mask for ivalid values
+  std::vector<cv::Mat> hsv_channels;
+  cv::split(hsv_image, hsv_channels);
+  cv::Mat value = hsv_channels[2];
+
+  cv::Mat min_value_mask;
+  cv::threshold(value, min_value_mask, min_value_, 255, CV_THRESH_BINARY);
+
+  // mask out low values in binary image
+  cv::bitwise_and(min_value_mask, binary_morphed, binary_morphed);
+
+  // debug purposes
+  std::string model_name = "valve";
+  cv::namedWindow(model_name +"-backprojection", 0);
+  cv::namedWindow(model_name + "-backprojection-thresholded", 0);
+  cv::namedWindow(model_name + "-backprojection-thresholded-morphed-masked", 0);
+  cv::namedWindow(model_name + "-value-mask", 0);
+  cv::imshow(model_name + "-backprojection", backprojection);
+  cv::imshow(model_name + "-backprojection-thresholded", binary);
+  cv::imshow(model_name + "-backprojection-thresholded-morphed-masked", binary_morphed);
+  cv::imshow(model_name + "-value-mask", min_value_mask);
+  cv::waitKey(5);
+/*
+  // Detect blobs in image
+  cv::Mat canny_output;
+  std::vector<std::vector<cv::Point> > contours;
+  std::vector<cv::Vec4i> hierarchy;
+
+  cv::Canny(output_img, canny_output, canny_first_threshold_, canny_second_threshold_);
+  cv::findContours(canny_output, contours, hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+  
+  for (size_t i = 0; i < contours.size(); i++)
+  {
+    //cv::Scalar color = cv::Scalar( 255*(i+1)/4, 255*(i+1)/4, 255*(i+1)/4 );
+    //cv::drawContours( output_img, contours, i, color, 2, 8, hierarchy, 0, cv::Point() );
+    //std::cout << "New row " << contours[i] << std::endl;
+
+    // Calculate mean points
+    double u_mean = 0;
+    double v_mean = 0;
+    for (size_t j = 0; j < contours[i].size(); j++)
+    {
+      u_mean += contours[i][j].x;
+      v_mean += contours[i][j].y;
+    }
+    u_mean /= contours[i].size();
+    v_mean /= contours[i].size();
+    cv::Point mean_point(u_mean, v_mean);
+
+    // Draw mean points
+    cv::circle( output_img, mean_point, 15, cv::Scalar(127,127,127), 2);
+
+    points_[type].push_back(mean_point);
+
+  }
+
+  // Show debug images for training
+  if(show_debug_images_ && !type)
+  {
+    cv::imshow("hue", hue_img);
+    cv::imshow("sat", sat_img);
+    //cv::imshow("val", val_img);
+    cv::imshow("Valve Tracker", output_img);
+    cv::waitKey(3);
+
+    processed_ = output_img;
+  }*/
+
+  return 0;
+}
+
+/** \brief static function version of mouseCallback
+  * \param mouse event (left button down/up...)
+  * \param x mouse position
+  * \param y mouse position
+  * \param flags not used
+  * \param input params. Need to be correctly re-caster to work
+  */
+void valve_tracker::ValveTrainer::staticMouseCallback(int event, int x, int y, int flags, void* param)
+{
+  // extract this pointer and call function on object
+  ValveTrainer* vt = reinterpret_cast<ValveTrainer*>(param);
+  assert(vt != NULL);
+  vt->mouseCallback(event, x, y, flags, 0);
+}
+
+/** \brief Mouse callback for training
+  * \param mouse event (left button down/up...)
+  * \param x mouse position
+  * \param y mouse position
+  * \param flags not used
+  * \param input params. Need to be correctly re-caster to work
+  */
+void valve_tracker::ValveTrainer::mouseCallback( int event, int x, int y, int flags, void* param)
+{
+  // check in which training status we are
+  switch( training_status_ )
+  {
+    case DISPLAY_VIDEO:
+      // if we press on the image, freeze it
+      if (event == CV_EVENT_LBUTTONDOWN)
+      {
+        training_status_ = AWAITING_TRAINING_IMAGE; 
+        ROS_INFO("[ValveTrainer:] Training image selected! Please draw a rectangle on the image.");
+      }
+      break;
+    case SHOWING_TRAINING_IMAGE:
+      // if we press the left button means we're going to select the ROI.
+      if (event == CV_EVENT_LBUTTONDOWN)
+      {
+        roi_rectangle_origin_ = cv::Point(x,y);
+        roi_rectangle_selection_ = cv::Rect(x,y,0,0);
+        training_status_ = PAINTING;
+      }
+      break;
+    case PAINTING:
+
+      // animate the growing rectangle
+      roi_rectangle_selection_.x = std::min(x, roi_rectangle_origin_.x);
+      roi_rectangle_selection_.y = std::min(y, roi_rectangle_origin_.y);
+      roi_rectangle_selection_.width = std::abs(x - roi_rectangle_origin_.x);
+      roi_rectangle_selection_.height = std::abs(y - roi_rectangle_origin_.y);
+      roi_rectangle_selection_ &= cv::Rect(0, 0, image.cols, image.rows);
+
+      // if we release the button means we've ended selecting the ROI.
+      if (event == CV_EVENT_LBUTTONUP)
+      {
+        if (roi_rectangle_selection_.width > 0 && roi_rectangle_selection_.height > 0)
+          training_status_ = ROI_SELECTED;
+      }
+      break;
+  }
+
+}
+
+/** \brief Histogram calculation in HSV colorspace
+  * \param input image 
+  * \param number of bins where to classify the histogram
+  * \param mask of the selected ROI
+  */
+cv::MatND valve_tracker::ValveTrainer::calculateHistogram(const cv::Mat& image, 
+                                                          const int bins[],  
+                                                          const cv::Mat& mask)
+{   
+  // we assume that the image is a regular three channel image
+  CV_Assert(image.type() == CV_8UC3);
+
+  // channels for wich to compute the histogram (H, S and V)
+  int channels[] = {0, 1, 2};
+
+  // Ranges for the histogram
+  float hue_ranges[] = {0, 180}; 
+  float saturation_ranges[] = {0, 256};
+  float value_ranges[] = {0, 256};
+  const float* ranges_hsv[] = {hue_ranges, saturation_ranges, value_ranges};
+
+  cv::MatND histogram;
+
+  // calculation
+  int num_arrays = 1;
+  int dimensions = 3;
+  cv::calcHist(&image, num_arrays, channels, mask, histogram, dimensions, bins, ranges_hsv);
+  
+  return histogram;
+}
+
+/** \brief Histogram plot in OpenCV namedWindow
+  * \param input histogram 
+  * \param name of the HS image window
+  * \param name of the HV image window
+  */
+void valve_tracker::ValveTrainer::showHSVHistogram(const cv::MatND& histogram,
+                                                   const std::string& name_hs, 
+                                                   const std::string& name_hv)
+{
+  int num_hue_bins = histogram.size[0];
+  int num_saturation_bins = histogram.size[1];
+  int num_value_bins = histogram.size[2];
+  
+  // find the maximum value to properly scale the histogram
+  float max_val = 0;
+  for( int h = 1; h < num_hue_bins + 1; h++ ){
+    for( int s = 1; s < num_saturation_bins + 1; s++ ){
+      for( int v = 1; v < num_value_bins + 1; v++ ){
+        float val = histogram.at<float>(h,s,v);
+        if (val>max_val && val<=255) max_val = val;
+      }
+    }
+  }
+
+  int scale = 4; // square size
+  cv::Mat histogram_image_hs = cv::Mat::zeros((num_saturation_bins + 1) * scale, (num_hue_bins + 1) * scale, CV_8UC3);
+  cv::Mat histogram_image_hv = cv::Mat::zeros((num_value_bins + 1) * scale, (num_hue_bins + 1) * scale, CV_8UC3);
+
+  // X axis
+  for( int h = 1; h < num_hue_bins + 1; h++ )
+    cv::rectangle( histogram_image_hs, cv::Point(h*scale, 0),
+                   cv::Point((h + 1)*scale - 1, scale - 1),
+                   cv::Scalar(1.0 * (h - 1) / num_hue_bins * 180.0, 255, 255, 0),
+                   CV_FILLED);
+
+  // Y axis
+  for( int s = 1; s < num_saturation_bins + 1; s++ )
+    cv::rectangle( histogram_image_hs, cv::Point(0, s * scale),
+                   cv::Point(scale - 1, (s + 1)*scale - 1),
+                   cv::Scalar(180, 1.0 * (s - 1) / num_saturation_bins * 255.0, 255, 0),
+                   CV_FILLED);
+  // second X axis
+  for( int h = 1; h < num_hue_bins + 1; h++ )
+    cv::rectangle( histogram_image_hv, cv::Point(h*scale, 0),
+                   cv::Point((h + 1)*scale - 1, scale - 1),
+                   cv::Scalar(1.0 * (h - 1) / num_hue_bins * 180.0, 255, 255, 0),
+                   CV_FILLED);
+
+  // second Y axis
+  for( int v = 1; v < num_value_bins + 1; v++ )
+    cv::rectangle( histogram_image_hv, cv::Point(0, v * scale),
+                   cv::Point(scale - 1, (v + 1)*scale - 1),
+                   cv::Scalar(180, 255, 1.0 * (v - 1) / num_value_bins * 255.0,  0),
+                   CV_FILLED);
+
+  cv::Mat histogram_hs, histogram_hv;
+  cv::cvtColor(histogram_image_hs, histogram_hs, CV_HSV2BGR);
+  cv::cvtColor(histogram_image_hv, histogram_hv, CV_HSV2BGR);
+
+  for( int h = 1; h < num_hue_bins + 1; h++ )
+    for( int s = 1; s < num_saturation_bins + 1; s++ )
+    {
+      float binVal = 0;
+      for( int v = 1; v < num_value_bins + 1; v++ )
+        binVal += (float)histogram.at<float>(h - 1, s - 1, v - 1);
+      binVal /= num_value_bins;
+      int intensity = (int)(binVal * 255 / max_val);
+      cv::rectangle( histogram_hs, cv::Point(h*scale, s*scale),
+                     cv::Point( (h+1)*scale - 1, (s+1)*scale - 1),
+                     cv::Scalar::all(intensity),
+                     CV_FILLED );
+     }
+  for( int h = 1; h < num_hue_bins + 1; h++ )
+    for( int v = 1; v < num_value_bins + 1; v++ )
+    {
+      float binVal = 0;
+      for( int s = 1; s < num_saturation_bins + 1; s++ )
+        binVal += (float)histogram.at<float>(h - 1, s - 1, v - 1);
+      binVal /= num_saturation_bins;
+      int intensity = cvRound(binVal * 255 / max_val);
+      cv::rectangle( histogram_hv, cv::Point(h*scale, v*scale),
+                     cv::Point( (h+1)*scale - 1, (v+1)*scale - 1),
+                     cv::Scalar::all(intensity),
+                     CV_FILLED );
+     }
+  cv::imshow( name_hs, histogram_hs );
+  cv::imshow( name_hv, histogram_hv );
+  cv::waitKey(5);
+}
+
+/** \brief Calculates the backprojection of the input image given the histogram
+  * \param input image
+  * \param input histogram
+  */
+cv::Mat valve_tracker::ValveTrainer::calculateBackprojection(const cv::Mat& image,
+                                                             const cv::MatND& histogram)
+{
+  // we assume that the image is a regular three channel image
+  CV_Assert(image.type() == CV_8UC3);
+
+  // channels for wich to compute the histogram (H, S and V)
+  int channels[] = {0, 1, 2};
+
+  // Ranges for the histogram
+  float hue_ranges[] = {0, 180}; 
+  float saturation_ranges[] = {0, 256};
+  float value_ranges[] = {0, 256};
+  const float* ranges_hsv[] = {hue_ranges, saturation_ranges, value_ranges};
+
+  cv::Mat back_projection;
+  int num_arrays = 1;
+  cv::calcBackProject(&image, num_arrays, channels, histogram,
+         back_projection, ranges_hsv);
+
+  return back_projection;
+}
+
+// crappy function to print crappy opencv matrices. 
+void valve_tracker::ValveTrainer::printMat(const cv::Mat & M)
+{
+  for( int h = 1; h < num_hue_bins_ + 1; h++ ){
+    for( int s = 1; s < num_sat_bins_ + 1; s++ ){
+      std::vector<float> kk;
+      for( int v = 1; v < num_val_bins_ + 1; v++ ){
+        float val = M.at<float>(h,s,v);
+        kk.push_back(val);
+      }
+      for(size_t i =0; i<kk.size(); i++)
+        std::cout << kk[i] << ' ';
+    }
+    std::cout << std::endl;
+  }
+}

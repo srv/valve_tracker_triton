@@ -36,3 +36,7 @@ include_directories(${Eigen_INCLUDE_DIRS})
 rosbuild_add_executable(valve_tracker_node src/valve_tracker_node.cpp
                                            src/valve_tracker.cpp)
 rosbuild_link_boost(valve_tracker_node signals)
+
+rosbuild_add_executable(valve_trainer_node src/valve_trainer_node.cpp
+                                           src/valve_trainer.cpp)
+rosbuild_link_boost(valve_trainer_node signals)
