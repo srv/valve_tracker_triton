@@ -18,7 +18,7 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   // Get all the params out!
   ros::NodeHandle nhp("~");
   nhp.param("stereo_frame_id", stereo_frame_id_, std::string("/stereo_down"));
-  nhp.param("base_link_frame_id", valve_frame_id_, std::string("/valve"));
+  nhp.param("valve_frame_id", valve_frame_id_, std::string("/valve"));
   nhp.param("threshold_h_low", threshold_h_low_, 0);
   nhp.param("threshold_h_hi", threshold_h_hi_, 255);
   nhp.param("threshold_s_low", threshold_s_low_, 0);
