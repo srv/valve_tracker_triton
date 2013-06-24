@@ -1,12 +1,11 @@
 <launch>
 
   <node pkg="valve_tracker_triton" type="valve_tracker_node" name="valve_tracker" output="screen">
-    <param name="closing_element_size" value="12"/>
-    <param name="opening_element_size" value="2"/>
-    <param name="canny_first_threshold" value="100"/>
-    <param name="canny_second_threshold" value="110"/>
+    <param name="opening_element_size" value="1"/>
+    <param name="closing_element_size" value="0"/>
     <param name="epipolar_width_threshold" value="3"/>
     <param name="binary_threshold" value="80"/>
+    <param name="min_value_threshold" value="110"/>
 
     <!-- Load model -->
     <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />

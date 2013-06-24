@@ -31,17 +31,6 @@ namespace valve_tracker
 		                  "\n" << r2.x() << ", " << r2.y() << ", " << r2.z() << ", " << tran.z());
 		}
 
-		/** \brief Creates an opencv circle element.
-		  * @return the circle element
-		  * \param element_size is radius of the circle (in pixels).
-		  */
-		static cv::Mat createElement(int element_size)
-		{
-		  cv::Mat element = cv::Mat::zeros(element_size, element_size, CV_8UC1);
-		  cv::circle(element, cv::Point(element_size / 2, element_size / 2), element_size / 2, cv::Scalar(255), -1);
-		  return element;
-		}
-
 		/** \brief Computes the euclidean distance of a point
 		  * @return point distance
 		  * \param 3D point
@@ -50,27 +39,9 @@ namespace valve_tracker
 		{
 		  return sqrt(point.x*point.x + point.y*point.y + point.z*point.z);
 		}
-
-		/** \brief Converts a cv::Mat to tf::Transform
-		  * @return the corresponding transform
-		  * \param input is the cv::Mat to be converted
-		  */
-		static tf::Transform cvmat2tf(cv::Mat input)
+		static double euclideanDist(tf::Vector3 point)
 		{
-		  tf::Matrix3x3 rot(input.at<double>(0,0),
-		                    input.at<double>(0,1),
-		                    input.at<double>(0,2),
-		                    input.at<double>(1,0),
-		                    input.at<double>(1,1),
-		                    input.at<double>(1,2),
-		                    input.at<double>(2,0),
-		                    input.at<double>(2,1),
-		                    input.at<double>(2,2));
-		  tf::Vector3 trans(input.at<double>(0,3), 
-		                    input.at<double>(1,3), 
-		                    input.at<double>(2,3));
-		  tf::Transform output(rot, trans);
-		  return output;   
+		  return sqrt(point[0]*point[0] + point[1]*point[1] + point[2]*point[2]);
 		}
 
 		/** \brief Sort 2 points

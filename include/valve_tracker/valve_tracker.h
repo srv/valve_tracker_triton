@@ -37,13 +37,16 @@ private:
   int closing_element_size_;
   int opening_element_size_;
   int binary_threshold_;
-  int canny_first_threshold_;
-  int canny_second_threshold_;
+  int min_blob_size_;
+  int max_blob_size_;
   int epipolar_width_threshold_;
   int mean_filter_size_;
+  int min_value_threshold_;
+  double max_tf_error_;
   std::string trained_model_path_;
   std::vector<cv::Point3f> valve_synthetic_points_;
   cv::MatND trained_model_;
+  bool show_debug_;
 
   tf::TransformBroadcaster tf_broadcaster_;         //!> Transform publisher
   tf::Transform camera_to_valve_;                   //!> Camera to valve transformation
@@ -61,8 +64,9 @@ private:
     cv::Mat img, bool debug);                             //!> Valve detection
   std::vector<cv::Point3d> triangulatePoints(
     std::vector< std::vector<cv::Point2d> > points_2d);   //!> Valve points triangulization
-  tf::Transform estimateTransform(
-    std::vector<cv::Point3d> points_3d);                  //!> Transform estimation
+  bool estimateTransform(
+    std::vector<cv::Point3d> points_3d,
+    tf::Transform& output);                               //!> Transform estimation
 
   cv::Mat calculateBackprojection(const cv::Mat& image,
     const cv::MatND& histogram);                          //!> Computes the backprojection of an histogram into an image
