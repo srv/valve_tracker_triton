@@ -1,7 +1,9 @@
 #ifndef UTILS
 #define UTILS
 
+#include <string>
 #include <ros/ros.h>
+#include <ros/package.h>
 #include <tf/transform_broadcaster.h>
 #include "opencv2/core/core.hpp"
 
@@ -76,9 +78,27 @@ namespace valve_tracker
 		  * \param point 1
 		  * \param point 2
 		  */
-		static bool sort_points_x(const cv::Point2d& p1,const cv::Point2d& p2)
+		static bool sort_points_x(const cv::Point2d& p1, const cv::Point2d& p2)
 		{
 			return (p1.x < p2.x);
+		}
+
+		/** \brief Sort 2 vectors by size
+		  * @return true if vector 1 is smaller than vector 2
+		  * \param vector 1
+		  * \param vector 2
+		  */
+		static bool sort_vectors_by_size(const std::vector<cv::Point>& v1, const std::vector<cv::Point>& v2)
+		{
+			return (v1.size() > v2.size());
+		}
+
+		/** \brief Get the directory of the package
+		  * @return string with the path of the ros package
+		  */
+		static std::string getPackageDir()
+		{
+		  return ros::package::getPath(ROS_PACKAGE_NAME);
 		}
 
 	};

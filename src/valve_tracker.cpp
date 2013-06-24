@@ -19,17 +19,27 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   ros::NodeHandle nhp("~");
   nhp.param("stereo_frame_id", stereo_frame_id_, std::string("/stereo_down"));
   nhp.param("valve_frame_id", valve_frame_id_, std::string("/valve"));
-  nhp.param("threshold_h_low", threshold_h_low_, 0);
-  nhp.param("threshold_h_hi", threshold_h_hi_, 255);
-  nhp.param("threshold_s_low", threshold_s_low_, 0);
-  nhp.param("threshold_s_hi", threshold_s_hi_, 255);
-  nhp.param("threshold_v_low", threshold_v_low_, 0);
-  nhp.param("threshold_v_hi", threshold_v_hi_, 255);
-  nhp.param("closing_element_size", closing_element_size_, 255);
-  nhp.param("opening_element_size", opening_element_size_, 255);
+  nhp.param("closing_element_size", closing_element_size_, 12);
+  nhp.param("opening_element_size", opening_element_size_, 2);
+  nhp.param("binary_threshold", binary_threshold_, 80);
   nhp.param("canny_first_threshold", canny_first_threshold_, 100);
   nhp.param("canny_second_threshold", canny_second_threshold_, 110);
   nhp.param("epipolar_width_threshold", epipolar_width_threshold_, 3);
+  nhp.param("mean_filter_size",mean_filter_size_, 1);
+  nhp.param("trained_model_path", trained_model_path_, 
+      valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
+
+  ROS_INFO_STREAM("[ValveTracker:] Valve Tracker Settings:" << std::endl <<
+                  "  stereo_frame_id            = " << stereo_frame_id_ << std::endl <<
+                  "  valve_frame_id             = " << valve_frame_id_ << std::endl <<
+                  "  closing_element_size       = " << closing_element_size_ << std::endl <<
+                  "  opening_element_size       = " << opening_element_size_ << std::endl <<
+                  "  opening_element_size       = " << opening_element_size_ << std::endl <<
+                  "  binary_threshold           = " << binary_threshold_ << std::endl <<
+                  "  canny_second_threshold     = " << canny_second_threshold_ << std::endl <<
+                  "  epipolar_width_threshold   = " << epipolar_width_threshold_ << std::endl <<
+                  "  mean_filter_size           = " << mean_filter_size_ << std::endl <<
+                  "  trained_model_path         = " << trained_model_path_ << std::endl);
 
   // Load the model
   XmlRpc::XmlRpcValue model;
@@ -43,8 +53,13 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   {
     ROS_ASSERT(model[i].getType() == XmlRpc::XmlRpcValue::TypeDouble);
     cv::Point3f p((double)model[i], (double)model[i+1], (double)model[i+2]);
-    mdl_.push_back(p);
+    valve_synthetic_points_.push_back(p);
   }
+
+  // Read the trained histogram
+  cv::FileStorage fs(trained_model_path_, cv::FileStorage::READ);
+  fs["model_histogram"] >> trained_model_;
+  fs.release();
 
   // Image publisher for future debug
   image_transport::ImageTransport it(nhp);
@@ -88,8 +103,8 @@ void valve_tracker::ValveTracker::stereoImageCallback(
 
   // Detect valve in both images
   std::vector< std::vector<cv::Point2d> > points_2d;
-  points_2d.push_back(valveDetection(l_cv_image_ptr->image)); // Left  points at idx=0
-  points_2d.push_back(valveDetection(r_cv_image_ptr->image)); // Right points at idx=1
+  points_2d.push_back(valveDetection(l_cv_image_ptr->image, true)); // Left  points at idx=0
+  points_2d.push_back(valveDetection(r_cv_image_ptr->image, false)); // Right points at idx=1
 
   // Valve is defined by 3 points
   if (points_2d[0].size() == 3 || points_2d[1].size() == 3)
@@ -130,87 +145,90 @@ void valve_tracker::ValveTracker::stereoImageCallback(
   * @return vector with the detected valve points
   * \param image where the valve will be detected
   */
-std::vector<cv::Point2d> 
-valve_tracker::ValveTracker::valveDetection(cv::Mat img)
+std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat image, bool debug)
 {
   // Initialize output
   std::vector<cv::Point2d> points;
 
-  cv::Mat hsv_img(img.size(), CV_8UC3);
-  
-  // Convert to HSV color space
-  cv::cvtColor(img, hsv_img, CV_BGR2HSV);
+  // Compute backprojection
+  cv::Mat hsv_image;
+  cv::cvtColor(image, hsv_image, CV_BGR2HSV);
+  cv::Mat backprojection = calculateBackprojection(hsv_image, trained_model_);
 
-  cv::Mat hue_img(img.size(), CV_8UC1);
-  cv::Mat sat_img(img.size(), CV_8UC1);
-  cv::Mat val_img(img.size(), CV_8UC1);
+  // filter out noise
+  if (mean_filter_size_ > 2)
+  {
+    cv::medianBlur(backprojection, backprojection, mean_filter_size_);
+  }
 
-  // Copy the channels to their respective cv::Mat array
-  int from_h[] = {0, 0};
-  int from_s[] = {1, 0};
-  int from_v[] = {2, 0};
-  cv::mixChannels(&img, 1, &hue_img, 1, from_h, 1);
-  cv::mixChannels(&img, 1, &sat_img, 1, from_s, 1);
-  cv::mixChannels(&img, 1, &val_img, 1, from_v, 1);
+  // perform thresholding
+  cv::Mat binary;
+  cv::threshold(backprojection, binary, binary_threshold_, 255, CV_THRESH_BINARY);
 
-  cv::Mat hue_img_low, hue_img_hi;
-  cv::Mat sat_img_low, sat_img_hi;
-  cv::Mat val_img_low, val_img_hi;
+  // some opening
+  int element_size = opening_element_size_;
+  cv::Mat element = cv::Mat::zeros(element_size, element_size, CV_8UC1);
+  cv::circle(element, cv::Point(element_size / 2, element_size / 2), element_size / 2, cv::Scalar(255), -1);
+  cv::Mat binary_morphed;
+  cv::morphologyEx(binary, binary_morphed, cv::MORPH_OPEN, element);
 
-  // Threshold those spaces
-  cv::threshold(hue_img, hue_img_low, threshold_h_low_, 255, cv::THRESH_BINARY); // threshold binary
-  cv::threshold(sat_img, sat_img_low, threshold_s_low_, 255, cv::THRESH_BINARY);
-  cv::threshold(val_img, val_img_low, threshold_v_low_, 255, cv::THRESH_BINARY);
-  
-  cv::threshold(hue_img, hue_img_hi, threshold_h_hi_, 255, cv::THRESH_BINARY_INV); // threshold binary
-  cv::threshold(sat_img, sat_img_hi, threshold_s_hi_, 255, cv::THRESH_BINARY_INV);
-  cv::threshold(val_img, val_img_hi, threshold_v_hi_, 255, cv::THRESH_BINARY_INV);
-
-  cv::Mat output_img(img.size(), CV_8UC1);
-  
-  cv::bitwise_and(hue_img_low, hue_img_hi, hue_img);
-  cv::bitwise_and(sat_img_low, sat_img_hi, sat_img);
-  cv::bitwise_and(val_img_low, val_img_hi, val_img);
-
-  cv::bitwise_and(hue_img, sat_img, output_img);
-  
-  // Morphology closing
-  cv::Mat element_closing = valve_tracker::Utils::createElement(closing_element_size_);
-  cv::Mat element_opening = valve_tracker::Utils::createElement(opening_element_size_);
-
-  cv::morphologyEx(output_img, output_img, cv::MORPH_OPEN, element_opening);
-  cv::morphologyEx(output_img, output_img, cv::MORPH_CLOSE, element_closing);
+  // some closing
+  element_size = closing_element_size_;
+  element = cv::Mat::zeros(element_size, element_size, CV_8UC1);
+  cv::circle(element, cv::Point(element_size / 2, element_size / 2), element_size / 2, cv::Scalar(255), -1);
+  cv::morphologyEx(binary_morphed, binary_morphed, cv::MORPH_CLOSE, element);
 
   // Detect blobs in image
   cv::Mat canny_output;
-  std::vector<std::vector<cv::Point> > contours;
+  std::vector< std::vector<cv::Point> > contours;
   std::vector<cv::Vec4i> hierarchy;
-
-  cv::Canny(output_img, canny_output, canny_first_threshold_, canny_second_threshold_);
+  cv::Canny(binary_morphed, canny_output, canny_first_threshold_, canny_second_threshold_);
   cv::findContours(canny_output, contours, hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
-  
-  for (size_t i = 0; i < contours.size(); i++)
+
+  // debug purposes
+  if (debug)
+  {
+    std::string model_name = "valve";
+    cv::namedWindow(model_name +"-backprojection", 0);
+    cv::namedWindow(model_name + "-backprojection-thresholded", 0);
+    cv::namedWindow(model_name + "-backprojection-thresholded-morphed-masked", 0);
+    cv::imshow(model_name + "-backprojection", backprojection);
+    cv::imshow(model_name + "-backprojection-thresholded", binary);
+    cv::imshow(model_name + "-backprojection-thresholded-morphed-masked", binary_morphed);
+    cv::waitKey(5);
+  }
+
+  if (contours.size() < 3)
+  {
+    ROS_WARN_STREAM("[ValveTracker:] Not enought points detected: " << contours.size() << " (3 needed).");
+    return points;
+  }
+  else
+  {
+    // 3 or more blobs detected. Sort by size.
+    std::sort(contours.begin(), contours.end(), valve_tracker::Utils::sort_vectors_by_size);
+  }
+
+  // Get the 3 biggest blobs
+  std::vector< std::vector<cv::Point> > contours_filtered(contours.begin(), contours.begin() + 3);
+
+  for (size_t i = 0; i < contours_filtered.size(); i++)
   {
     // Calculate mean points
     double u_mean = 0;
     double v_mean = 0;
-    for (size_t j = 0; j < contours[i].size(); j++)
+    for (size_t j = 0; j < contours_filtered[i].size(); j++)
     {
-      u_mean += contours[i][j].x;
-      v_mean += contours[i][j].y;
+      u_mean += contours_filtered[i][j].x;
+      v_mean += contours_filtered[i][j].y;
     }
-    u_mean /= contours[i].size();
-    v_mean /= contours[i].size();
+    u_mean /= contours_filtered[i].size();
+    v_mean /= contours_filtered[i].size();
     cv::Point mean_point(u_mean, v_mean);
-
-    // Draw mean points
-    cv::circle( output_img, mean_point, 15, cv::Scalar(127,127,127), 2);
 
     points.push_back(mean_point);
   }
-
-  processed_ = output_img;
-
+  
   return points;
 }
 
@@ -374,23 +392,23 @@ tf::Transform valve_tracker::ValveTracker::estimateTransform(
   // Compute centroids
   Eigen::Vector3f centroid_mdl(0.0, 0.0, 0.0);
   Eigen::Vector3f centroid_tgt(0.0, 0.0, 0.0);
-  for (unsigned int i=0; i<mdl_.size(); i++)
+  for (unsigned int i=0; i<valve_synthetic_points_.size(); i++)
   {
-    centroid_mdl(0) += mdl_[i].x;
-    centroid_mdl(1) += mdl_[i].y;
-    centroid_mdl(2) += mdl_[i].z;
+    centroid_mdl(0) += valve_synthetic_points_[i].x;
+    centroid_mdl(1) += valve_synthetic_points_[i].y;
+    centroid_mdl(2) += valve_synthetic_points_[i].z;
     centroid_tgt(0) += tgt[i].x;
     centroid_tgt(1) += tgt[i].y;
     centroid_tgt(2) += tgt[i].z;
   }
-  centroid_mdl /= mdl_.size();
+  centroid_mdl /= valve_synthetic_points_.size();
   centroid_tgt /= tgt.size();
 
   // Compute H
   Eigen::Matrix3f H = Eigen::Matrix3f::Zero();
-  for (unsigned int i=0; i<mdl_.size(); i++)
+  for (unsigned int i=0; i<valve_synthetic_points_.size(); i++)
   {
-    Eigen::Vector3f p_mdl(mdl_[i].x, mdl_[i].y, mdl_[i].z);
+    Eigen::Vector3f p_mdl(valve_synthetic_points_[i].x, valve_synthetic_points_[i].y, valve_synthetic_points_[i].z);
     Eigen::Vector3f p_tgt(tgt[i].x, tgt[i].y, tgt[i].z);
 
     Eigen::Vector3f v_mdl = p_mdl - centroid_mdl;
@@ -425,4 +443,31 @@ tf::Transform valve_tracker::ValveTracker::estimateTransform(
   tf::Transform output(rot, trans);
 
   return output;
+}
+
+/** \brief Calculates the backprojection of the input image given the histogram
+  * \param input image
+  * \param input histogram
+  */
+cv::Mat valve_tracker::ValveTracker::calculateBackprojection(const cv::Mat& image,
+                                                             const cv::MatND& histogram)
+{
+  // we assume that the image is a regular three channel image
+  CV_Assert(image.type() == CV_8UC3);
+
+  // channels for wich to compute the histogram (H, S and V)
+  int channels[] = {0, 1, 2};
+
+  // Ranges for the histogram
+  float hue_ranges[] = {0, 180}; 
+  float saturation_ranges[] = {0, 256};
+  float value_ranges[] = {0, 256};
+  const float* ranges_hsv[] = {hue_ranges, saturation_ranges, value_ranges};
+
+  cv::Mat back_projection;
+  int num_arrays = 1;
+  cv::calcBackProject(&image, num_arrays, channels, histogram,
+         back_projection, ranges_hsv);
+
+  return back_projection;
 }

@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <cv_bridge/cv_bridge.h>
-
 #include "valve_tracker/valve_trainer.h"
 #include "valve_tracker/utils.h"
 
@@ -16,21 +15,17 @@ valve_tracker::ValveTrainer::ValveTrainer(const std::string transport) : StereoI
   // Get all the params out!
   ros::NodeHandle nhp("~");
 
-  nhp.param("num_hue_bins",num_hue_bins_, 8);
-  nhp.param("num_sat_bins",num_sat_bins_, 8);
-  nhp.param("num_val_bins",num_val_bins_, 8);
-  nhp.param("mean_filter_size",mean_filter_size_, 4);
-  nhp.param("opening_element_size",opening_element_size_, 4);
-  nhp.param("closing_element_size",closing_element_size_, 4);
-  nhp.param("min_value",min_value_, 30);
+  nhp.param("num_hue_bins", num_hue_bins_, 16);
+  nhp.param("num_sat_bins", num_sat_bins_, 16);
+  nhp.param("num_val_bins", num_val_bins_, 1);
+  nhp.param("trained_model_path", trained_model_path_, 
+      valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
 
   ROS_INFO_STREAM("[ValveTrainer:] Valve Trainer Settings:" << std::endl <<
+                  "  trained_model_path   = " << trained_model_path_ << std::endl <<
                   "  num_hue_bins         = " << num_hue_bins_ << std::endl <<
                   "  num_sat_bins         = " << num_sat_bins_ << std::endl <<
-                  "  num_val_bins         = " << num_val_bins_ << std::endl <<
-                  "  mean_filter_size     = " << mean_filter_size_ << std::endl <<
-                  "  opening_element_size = " << opening_element_size_ << std::endl <<
-                  "  min_value            = " << min_value_ << std::endl);
+                  "  num_val_bins         = " << num_val_bins_ << std::endl);
 
   // first status: show live video
   training_status_ = DISPLAY_VIDEO;
@@ -105,13 +100,16 @@ void valve_tracker::ValveTrainer::stereoImageCallback(
       training_status_ = TRAINED;
       break;
     case TRAINED:
-      // detect the valve with the training
-      ROS_INFO_ONCE("Trying to detect the valve...");
-      detect(model_histogram_, image);
+      // save the model
+      ROS_INFO_STREAM_ONCE("Saving the model into: " << trained_model_path_);
+      cv::FileStorage fs(trained_model_path_, cv::FileStorage::WRITE);
+      fs << "model_histogram" << model_histogram_;
+      fs.release();
       break;
   }
 
-  if (PAINTING){
+  if (PAINTING)
+  {
     cv::rectangle(image, roi_rectangle_selection_, cv::Scalar(255,255,255),3);
   }
   cv::imshow("Training GUI", image);
@@ -147,8 +145,6 @@ cv::MatND valve_tracker::ValveTrainer::train(const cv::Mat& image)
   //cv::MatND model_histogram(target_hist.size(), CV_32FC3);
   float epsilon = 1e-6;
 
-  ROS_INFO("kk");
-
   for( int h = 0; h < num_hue_bins_; h++ ){
     for( int s = 0; s < num_sat_bins_; s++ ){
       for( int v = 0; v < num_val_bins_; v++ ){
@@ -174,129 +170,7 @@ cv::MatND valve_tracker::ValveTrainer::train(const cv::Mat& image)
   //TODO: set small saturations and values to zero
   //TODO: keep only the upper region of the sat and val channels. we want clear and "almost" sharp colors
 
-  printMat(target_hist);
-  std::cout << std::endl;
-  printMat(background_hist);
-  std::cout << std::endl;
-  printMat(model_histogram);
-
-  //double min=0,max=0;
-  //cv::minMaxLoc(hue_img, &min, &max, 0, 0);
-
-  //ROS_INFO_STREAM("Min value: " << min << " Max value: " << max);
-  //ROS_INFO_STREAM("Histogram:\n" << model_histogram);
-
   return model_histogram;
-}
-
-int valve_tracker::ValveTrainer::detect(const cv::MatND& hist, const cv::Mat& image)
-{
-  
-  if (hist.size[0] != num_hue_bins_ ||
-      hist.size[1] != num_sat_bins_ ||
-      hist.size[2] != num_val_bins_)
-  {
-    ROS_ERROR("[ValveTrainer:] Training data does not fit to actual parameters, you have to re-train with the same parameters!");
-    return -1;
-  }
-
-  cv::Mat hsv_image;
-  cv::cvtColor(image, hsv_image, CV_BGR2HSV);
-
-  cv::Mat backprojection = calculateBackprojection(hsv_image, hist);
-
-  // filter out noise
-  if (mean_filter_size_ > 2)
-  {
-    cv::medianBlur(backprojection, backprojection, mean_filter_size_);
-  }
-
-  // perform thresholding
-  cv::Mat binary;
-  cv::threshold(backprojection, binary, 127, 255, CV_THRESH_BINARY);
-
-  // some opening
-  int element_size = opening_element_size_;
-  cv::Mat element = cv::Mat::zeros(element_size, element_size, CV_8UC1);
-  cv::circle(element, cv::Point(element_size / 2, element_size / 2), element_size / 2, cv::Scalar(255), -1);
-  cv::Mat binary_morphed;
-  cv::morphologyEx(binary, binary_morphed, cv::MORPH_OPEN, element);
-
-  // some closing
-  element_size = closing_element_size_;
-  element = cv::Mat::zeros(element_size, element_size, CV_8UC1);
-  cv::circle(element, cv::Point(element_size / 2, element_size / 2), element_size / 2, cv::Scalar(255), -1);
-  cv::morphologyEx(binary_morphed, binary_morphed, cv::MORPH_CLOSE, element);
-
-  // create mask for ivalid values
-  std::vector<cv::Mat> hsv_channels;
-  cv::split(hsv_image, hsv_channels);
-  cv::Mat value = hsv_channels[2];
-
-  cv::Mat min_value_mask;
-  cv::threshold(value, min_value_mask, min_value_, 255, CV_THRESH_BINARY);
-
-  // mask out low values in binary image
-  cv::bitwise_and(min_value_mask, binary_morphed, binary_morphed);
-
-  // debug purposes
-  std::string model_name = "valve";
-  cv::namedWindow(model_name +"-backprojection", 0);
-  cv::namedWindow(model_name + "-backprojection-thresholded", 0);
-  cv::namedWindow(model_name + "-backprojection-thresholded-morphed-masked", 0);
-  cv::namedWindow(model_name + "-value-mask", 0);
-  cv::imshow(model_name + "-backprojection", backprojection);
-  cv::imshow(model_name + "-backprojection-thresholded", binary);
-  cv::imshow(model_name + "-backprojection-thresholded-morphed-masked", binary_morphed);
-  cv::imshow(model_name + "-value-mask", min_value_mask);
-  cv::waitKey(5);
-/*
-  // Detect blobs in image
-  cv::Mat canny_output;
-  std::vector<std::vector<cv::Point> > contours;
-  std::vector<cv::Vec4i> hierarchy;
-
-  cv::Canny(output_img, canny_output, canny_first_threshold_, canny_second_threshold_);
-  cv::findContours(canny_output, contours, hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
-  
-  for (size_t i = 0; i < contours.size(); i++)
-  {
-    //cv::Scalar color = cv::Scalar( 255*(i+1)/4, 255*(i+1)/4, 255*(i+1)/4 );
-    //cv::drawContours( output_img, contours, i, color, 2, 8, hierarchy, 0, cv::Point() );
-    //std::cout << "New row " << contours[i] << std::endl;
-
-    // Calculate mean points
-    double u_mean = 0;
-    double v_mean = 0;
-    for (size_t j = 0; j < contours[i].size(); j++)
-    {
-      u_mean += contours[i][j].x;
-      v_mean += contours[i][j].y;
-    }
-    u_mean /= contours[i].size();
-    v_mean /= contours[i].size();
-    cv::Point mean_point(u_mean, v_mean);
-
-    // Draw mean points
-    cv::circle( output_img, mean_point, 15, cv::Scalar(127,127,127), 2);
-
-    points_[type].push_back(mean_point);
-
-  }
-
-  // Show debug images for training
-  if(show_debug_images_ && !type)
-  {
-    cv::imshow("hue", hue_img);
-    cv::imshow("sat", sat_img);
-    //cv::imshow("val", val_img);
-    cv::imshow("Valve Tracker", output_img);
-    cv::waitKey(3);
-
-    processed_ = output_img;
-  }*/
-
-  return 0;
 }
 
 /** \brief static function version of mouseCallback
@@ -482,48 +356,4 @@ void valve_tracker::ValveTrainer::showHSVHistogram(const cv::MatND& histogram,
   cv::imshow( name_hs, histogram_hs );
   cv::imshow( name_hv, histogram_hv );
   cv::waitKey(5);
-}
-
-/** \brief Calculates the backprojection of the input image given the histogram
-  * \param input image
-  * \param input histogram
-  */
-cv::Mat valve_tracker::ValveTrainer::calculateBackprojection(const cv::Mat& image,
-                                                             const cv::MatND& histogram)
-{
-  // we assume that the image is a regular three channel image
-  CV_Assert(image.type() == CV_8UC3);
-
-  // channels for wich to compute the histogram (H, S and V)
-  int channels[] = {0, 1, 2};
-
-  // Ranges for the histogram
-  float hue_ranges[] = {0, 180}; 
-  float saturation_ranges[] = {0, 256};
-  float value_ranges[] = {0, 256};
-  const float* ranges_hsv[] = {hue_ranges, saturation_ranges, value_ranges};
-
-  cv::Mat back_projection;
-  int num_arrays = 1;
-  cv::calcBackProject(&image, num_arrays, channels, histogram,
-         back_projection, ranges_hsv);
-
-  return back_projection;
-}
-
-// crappy function to print crappy opencv matrices. 
-void valve_tracker::ValveTrainer::printMat(const cv::Mat & M)
-{
-  for( int h = 1; h < num_hue_bins_ + 1; h++ ){
-    for( int s = 1; s < num_sat_bins_ + 1; s++ ){
-      std::vector<float> kk;
-      for( int v = 1; v < num_val_bins_ + 1; v++ ){
-        float val = M.at<float>(h,s,v);
-        kk.push_back(val);
-      }
-      for(size_t i =0; i<kk.size(); i++)
-        std::cout << kk[i] << ' ';
-    }
-    std::cout << std::endl;
-  }
 }

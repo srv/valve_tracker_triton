@@ -25,6 +25,7 @@ class ValveTrainer : public StereoImageProcessor
 
 public:
 
+  // Trainer states
 	enum Mode
 	{
 	  DISPLAY_VIDEO,
@@ -45,23 +46,20 @@ public:
 
 private:
 
-  // Node parameters
+  // Trainer HSV values
+  std::string trained_model_path_;
   int num_hue_bins_;
   int num_sat_bins_;
   int num_val_bins_;
-  int mean_filter_size_;
-  int closing_element_size_;
-  int opening_element_size_;
-  int min_value_;
 
-  int training_status_;
+  int training_status_;               //!> Defines the trainer Mode
 
-  cv::Mat training_image_; //!> Image HSV used to train
+  cv::Mat training_image_;            //!> Image HSV used to train
 
-  cv::Point roi_rectangle_origin_;
+  cv::Point roi_rectangle_origin_;    
   cv::Rect roi_rectangle_selection_;
 
-  cv::MatND model_histogram_; //!> histogram of the trained model
+  cv::MatND model_histogram_;         //!> Histogram of the trained model
 
   void stereoImageCallback(
       const sensor_msgs::ImageConstPtr& l_image_msg,
@@ -78,10 +76,6 @@ private:
   void showHSVHistogram(const cv::MatND& histogram,
                         const std::string& name_hs, 
                         const std::string& name_hv);
-  cv::Mat calculateBackprojection(const cv::Mat& image,
-                                  const cv::MatND& histogram);
-
-  void printMat(const cv::Mat& mat);
 };
 
 } // namespace

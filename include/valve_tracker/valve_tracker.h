@@ -32,19 +32,18 @@ private:
   std::string stereo_frame_id_;
   std::string valve_frame_id_;
   image_transport::Publisher image_pub_;
-  int threshold_h_low_;
-  int threshold_h_hi_;
-  int threshold_s_low_;
-  int threshold_s_hi_;
-  int threshold_v_low_;
-  int threshold_v_hi_;
+
+  // Tracker parameters
   int closing_element_size_;
   int opening_element_size_;
+  int binary_threshold_;
   int canny_first_threshold_;
   int canny_second_threshold_;
   int epipolar_width_threshold_;
-  int show_debug_images_;
-  std::vector<cv::Point3f> mdl_;
+  int mean_filter_size_;
+  std::string trained_model_path_;
+  std::vector<cv::Point3f> valve_synthetic_points_;
+  cv::MatND trained_model_;
 
   tf::TransformBroadcaster tf_broadcaster_;         //!> Transform publisher
   tf::Transform camera_to_valve_;                   //!> Camera to valve transformation
@@ -58,11 +57,15 @@ private:
       const sensor_msgs::CameraInfoConstPtr& l_info_msg,
       const sensor_msgs::CameraInfoConstPtr& r_info_msg); //!> Image callback
 
-  std::vector<cv::Point2d> valveDetection(cv::Mat img);   //!> Valve detection
+  std::vector<cv::Point2d> valveDetection(
+    cv::Mat img, bool debug);                             //!> Valve detection
   std::vector<cv::Point3d> triangulatePoints(
     std::vector< std::vector<cv::Point2d> > points_2d);   //!> Valve points triangulization
   tf::Transform estimateTransform(
     std::vector<cv::Point3d> points_3d);                  //!> Transform estimation
+
+  cv::Mat calculateBackprojection(const cv::Mat& image,
+    const cv::MatND& histogram);                          //!> Computes the backprojection of an histogram into an image
   
 };
 
