@@ -205,7 +205,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
 
   if (contours.size() < 3)
   {
-    ROS_WARN_STREAM("[ValveTracker:] Not enought points detected: " << contours.size() << " (3 needed).");
+    ROS_DEBUG_STREAM("[ValveTracker:] Not enought points detected: " << contours.size() << " (3 needed).");
     return points;
   }
   else
@@ -224,6 +224,14 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
         ++iter;
       }
     }
+
+    // Check that we keep having at least 3 contours
+    if (contours.size() < 3)
+    {
+      ROS_DEBUG("[ValveTracker:] Blob filtering has removed too many blobs!");
+      return points;
+    }
+
     // Sort the result by size
     std::sort(contours.begin(), contours.end(), valve_tracker::Utils::sort_vectors_by_size);
   }
@@ -291,7 +299,7 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
   // Sanity check
   if (points_2d[0].size() != 3 || points_2d[1].size() != 3)
   {
-    ROS_WARN_STREAM(  "[ValveTracker:] Incorrect number of valve points found (" << 
+    ROS_DEBUG_STREAM("[ValveTracker:] Incorrect number of valve points found (" << 
                       points_2d[0].size() << " points) 3 needed.");
     return points3d;
   }
