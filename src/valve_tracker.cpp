@@ -172,7 +172,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   colors[2] = cv::Scalar(0, 0, 255);
 
   // filter out noise
-  if (mean_filter_size_ > 2)
+  if (mean_filter_size_ > 2 && mean_filter_size_ % 2 == 1)
   {
     cv::medianBlur(backprojection, backprojection, mean_filter_size_);
   }
@@ -281,6 +281,18 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
     cv::namedWindow(model_name + "-backprojection-contours", 0);
     cv::namedWindow(model_name + "-binary", 0);
     cv::namedWindow(model_name + "-binary-morphed", 0);
+
+    cv::createTrackbar("mean_filter_size", model_name + "-binary",  &mean_filter_size_, 255);
+    cv::createTrackbar("binary_threshold", model_name + "-binary",  &binary_threshold_, 255);
+
+    cv::createTrackbar("closing_element_size", model_name + "-binary-morphed",  &closing_element_size_, 255);
+    cv::createTrackbar("opening_element_size", model_name + "-binary-morphed",  &opening_element_size_, 255);
+    cv::createTrackbar("min_value_threshold", model_name + "-binary-morphed",  &min_value_threshold_, 255);
+
+    cv::createTrackbar("min_blob_size", model_name + "-backprojection-contours",  &min_blob_size_, 255);
+    cv::createTrackbar("max_blob_size", model_name + "-backprojection-contours",  &max_blob_size_, 255);
+
+
     cv::imshow(model_name + "-backprojection-contours", contour_image);
     cv::imshow(model_name + "-binary", binary);
     cv::imshow(model_name + "-binary-morphed", binary_morphed);
