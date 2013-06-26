@@ -163,6 +163,14 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   cv::cvtColor(image, hsv_image, CV_BGR2HSV);
   cv::Mat backprojection = calculateBackprojection(hsv_image, trained_model_);
 
+  // Used to draw the contours
+  cv::Mat contour_image(backprojection.size(), CV_8UC3, cv::Scalar(0,0,0));
+  cv::cvtColor(backprojection, contour_image, CV_GRAY2RGB);
+  cv::Scalar colors[3];
+  colors[0] = cv::Scalar(255, 0, 0);
+  colors[1] = cv::Scalar(0, 255, 0);
+  colors[2] = cv::Scalar(0, 0, 255);
+
   // filter out noise
   if (mean_filter_size_ > 2)
   {
@@ -202,11 +210,11 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   std::vector< std::vector<cv::Point> > contours;
   cv::Mat contour_output = binary_morphed.clone();
   cv::findContours(contour_output, contours, CV_RETR_LIST, CV_CHAIN_APPROX_NONE);
+  std::vector< std::vector<cv::Point> > contours_filtered;
 
   if (contours.size() < 3)
   {
     ROS_DEBUG_STREAM("[ValveTracker:] Not enought points detected: " << contours.size() << " (3 needed).");
-    return points;
   }
   else
   {
@@ -229,43 +237,39 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
     if (contours.size() < 3)
     {
       ROS_DEBUG("[ValveTracker:] Blob filtering has removed too many blobs!");
-      return points;
     }
-
-    // Sort the result by size
-    std::sort(contours.begin(), contours.end(), valve_tracker::Utils::sort_vectors_by_size);
-  }
-
-  // Get the 3 biggest blobs
-  std::vector< std::vector<cv::Point> > contours_filtered(contours.begin(), contours.begin() + 3);
-
-  for (size_t i = 0; i < contours_filtered.size(); i++)
-  {
-    // Calculate mean points
-    double u_mean = 0;
-    double v_mean = 0;
-    for (size_t j = 0; j < contours_filtered[i].size(); j++)
+    else
     {
-      u_mean += contours_filtered[i][j].x;
-      v_mean += contours_filtered[i][j].y;
-    }
-    u_mean /= contours_filtered[i].size();
-    v_mean /= contours_filtered[i].size();
-    cv::Point mean_point(u_mean, v_mean);
+      // Sort the result by size
+      std::sort(contours.begin(), contours.end(), valve_tracker::Utils::sort_vectors_by_size);
 
-    points.push_back(mean_point);
+      // Get the 3 biggest blobs
+      std::vector< std::vector<cv::Point> > contours_tmp(contours.begin(), contours.begin() + 3);
+      contours_filtered = contours_tmp;
+
+      for (size_t i = 0; i < contours_filtered.size(); i++)
+      {
+        // Calculate mean points
+        double u_mean = 0;
+        double v_mean = 0;
+        for (size_t j = 0; j < contours_filtered[i].size(); j++)
+        {
+          u_mean += contours_filtered[i][j].x;
+          v_mean += contours_filtered[i][j].y;
+        }
+        u_mean /= contours_filtered[i].size();
+        v_mean /= contours_filtered[i].size();
+        cv::Point mean_point(u_mean, v_mean);
+
+        points.push_back(mean_point);
+      }
+    }
   }
 
   // debug purposes
   if (debug)
   {
-    // Draw the contours
-    cv::Mat contour_image(backprojection.size(), CV_8UC3, cv::Scalar(0,0,0));
-    cv::cvtColor(backprojection, contour_image, CV_GRAY2RGB);
-    cv::Scalar colors[3];
-    colors[0] = cv::Scalar(255, 0, 0);
-    colors[1] = cv::Scalar(0, 255, 0);
-    colors[2] = cv::Scalar(0, 0, 255);
+    
     for (size_t idx=0; idx<contours_filtered.size(); idx++)
     {
       cv::drawContours(contour_image, contours_filtered, idx, colors[idx % 3], 2);
@@ -512,6 +516,7 @@ bool valve_tracker::ValveTracker::estimateTransform(
   }
   // Average error
   error = error / valve_synthetic_points_.size();
+  ROS_DEBUG_STREAM("ERROR: " << error);
 
   // Apply a threshold over the error
   if (error > max_tf_error_)
