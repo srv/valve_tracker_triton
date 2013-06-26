@@ -6,8 +6,6 @@
 #include <Eigen/Eigen>
 #include "opencv2/core/core.hpp"
 
-#define PI 3.14159265
-
 /** \brief ValveTracker constructor
   * \param transport
   */
@@ -27,7 +25,7 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   nhp.param("max_blob_size", max_blob_size_, 200);
   nhp.param("epipolar_width_threshold", epipolar_width_threshold_, 3);
   nhp.param("mean_filter_size", mean_filter_size_, 1);
-  nhp.param("max_tf_error", max_tf_error_, 0.01);
+  nhp.param("max_tf_error", max_tf_error_, 0.1);
   nhp.param("trained_model_path", trained_model_path_, 
       valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
   nhp.param("show_debug", show_debug_, true);
@@ -57,8 +55,8 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   for (int i=0; i<model.size(); i=i+3)
   {
     ROS_ASSERT(model[i].getType() == XmlRpc::XmlRpcValue::TypeDouble);
-    cv::Point3f p((double)model[i], (double)model[i+1], (double)model[i+2]);
-    valve_synthetic_points_.push_back(p);
+    cv::Point3d p((double)model[i], (double)model[i+1], (double)model[i+2]);
+    valve_model_points_.push_back(p);
   }
 
   // Read the trained histogram
@@ -166,10 +164,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   // Used to draw the contours
   cv::Mat contour_image(backprojection.size(), CV_8UC3, cv::Scalar(0,0,0));
   cv::cvtColor(backprojection, contour_image, CV_GRAY2RGB);
-  cv::Scalar colors[3];
-  colors[0] = cv::Scalar(255, 0, 0);
-  colors[1] = cv::Scalar(0, 255, 0);
-  colors[2] = cv::Scalar(0, 0, 255);
+  cv::Scalar color(0, 0, 255);
 
   // filter out noise
   if (mean_filter_size_ > 2 && mean_filter_size_ % 2 == 1)
@@ -247,6 +242,9 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
       std::vector< std::vector<cv::Point> > contours_tmp(contours.begin(), contours.begin() + 3);
       contours_filtered = contours_tmp;
 
+      // Sort from left to right and from top to bottom
+
+
       for (size_t i = 0; i < contours_filtered.size(); i++)
       {
         // Calculate mean points
@@ -271,8 +269,8 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   {
     for (size_t idx=0; idx<contours_filtered.size(); idx++)
     {
-      cv::drawContours(contour_image, contours_filtered, idx, colors[idx % 3], 2);
-      cv::circle(contour_image, points[idx], 15, colors[idx % 3], 2);
+      cv::drawContours(contour_image, contours_filtered, idx, color, 2);
+      cv::circle(contour_image, points[idx], 15, color, 2);
     }
 
     // Show images
@@ -313,8 +311,9 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
   // Sanity check
   if (points_2d[0].size() != 3 || points_2d[1].size() != 3)
   {
-    ROS_DEBUG_STREAM("[ValveTracker:] Incorrect number of valve points found (" << 
-                      points_2d[0].size() << " points) 3 needed.");
+    ROS_DEBUG_STREAM("[ValveTracker:] Incorrect number of valve points found (L:" << 
+                      points_2d[0].size() << " R:" << points_2d[0].size() << 
+                      " points) 3 needed.");
     return points3d;
   }
 
@@ -402,139 +401,43 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
 }
 
 /** \brief Detect the valve into the image
-  * @return true if transform could be optained, false otherwise.
+  * @return true if transform could be obtained, false otherwise.
   * \param 3D points of the valve.
   * \param output transformation.
   */
 bool valve_tracker::ValveTracker::estimateTransform(
-    std::vector<cv::Point3d> points_3d, tf::Transform& output)
+    std::vector<cv::Point3d> valve_3d_points, tf::Transform& affineTf)
 {
-  output.setIdentity();
+  affineTf.setIdentity();
 
   // Sanity check
-  if (points_3d.size() != 3)
+  if (valve_3d_points.size() != 3)
   {
     ROS_WARN_STREAM(  "[ValveTracker:] Impossible to estimate the transformation " << 
                       "between camera and valve, wrong 3d correspondences size: " <<
-                      points_3d.size());
+                      valve_3d_points.size());
     return false;
   }
 
-  // Target point cloud
-  std::vector<cv::Point3f> tgt;
+  // Match the real valve points with the model
+  std::vector<cv::Point3d> valve_target_points = matchTgtMdlPoints(valve_3d_points, false);
 
-  // Get target root point
-  double distance = valve_tracker::Utils::euclideanDist(points_3d[0]);
-  int idx_root = 0;
-  for (unsigned int i=1; i<points_3d.size(); i++)
-  {
-    if(valve_tracker::Utils::euclideanDist(points_3d[i]) > distance)
-    {
-      distance = valve_tracker::Utils::euclideanDist(points_3d[i]);
-      idx_root = i;
-    }
-  }
-
-  // Compute target central point
-  static const int arr[] = {0, 1, 2};
-  std::vector<int> v (arr, arr + sizeof(arr) / sizeof(arr[0]));
-  v.erase(v.begin() + idx_root);
-  tgt.push_back(cv::Point3f( (points_3d[v[0]].x + points_3d[v[1]].x) / 2,
-                             (points_3d[v[0]].y + points_3d[v[1]].y) / 2,
-                             (points_3d[v[0]].z + points_3d[v[1]].z) / 2));
-
-  // Find the valve symmetrical sides
-  if (points_3d[v[0]].x < points_3d[v[1]].x)
-  {
-    tgt.push_back(cv::Point3f( points_3d[v[0]].x, points_3d[v[0]].y, points_3d[v[0]].z ));
-    tgt.push_back(cv::Point3f( points_3d[v[1]].x, points_3d[v[1]].y, points_3d[v[1]].z ));
-  }
-  else
-  {
-    tgt.push_back(cv::Point3f( points_3d[v[1]].x, points_3d[v[1]].y, points_3d[v[1]].z ));
-    tgt.push_back(cv::Point3f( points_3d[v[0]].x, points_3d[v[0]].y, points_3d[v[0]].z ));
-  }
-
-  tgt.push_back(cv::Point3f( points_3d[idx_root].x, points_3d[idx_root].y, points_3d[idx_root].z ));
-
-  // Compute centroids
-  Eigen::Vector3f centroid_mdl(0.0, 0.0, 0.0);
-  Eigen::Vector3f centroid_tgt(0.0, 0.0, 0.0);
-  for (unsigned int i=0; i<valve_synthetic_points_.size(); i++)
-  {
-    centroid_mdl(0) += valve_synthetic_points_[i].x;
-    centroid_mdl(1) += valve_synthetic_points_[i].y;
-    centroid_mdl(2) += valve_synthetic_points_[i].z;
-    centroid_tgt(0) += tgt[i].x;
-    centroid_tgt(1) += tgt[i].y;
-    centroid_tgt(2) += tgt[i].z;
-  }
-  centroid_mdl /= valve_synthetic_points_.size();
-  centroid_tgt /= tgt.size();
-
-  // Compute H
-  Eigen::Matrix3f H = Eigen::Matrix3f::Zero();
-  for (unsigned int i=0; i<valve_synthetic_points_.size(); i++)
-  {
-    Eigen::Vector3f p_mdl(valve_synthetic_points_[i].x, valve_synthetic_points_[i].y, valve_synthetic_points_[i].z);
-    Eigen::Vector3f p_tgt(tgt[i].x, tgt[i].y, tgt[i].z);
-
-    Eigen::Vector3f v_mdl = p_mdl - centroid_mdl;
-    Eigen::Vector3f v_tgt = p_tgt - centroid_tgt;
-
-    H += v_mdl * v_tgt.transpose();
-  }
- 
-  // Pseudo inverse
-  Eigen::JacobiSVD<Eigen::Matrix3f> svdOfH(H, Eigen::ComputeFullU | Eigen::ComputeFullV);
-  Eigen::Matrix3f u_svd = svdOfH.matrixU ();
-  Eigen::Matrix3f v_svd = svdOfH.matrixV ();
-  
-  // Compute R = V * U'
-  if (u_svd.determinant () * v_svd.determinant () < 0)
-  {
-    for (int x = 0; x < 3; ++x)
-      v_svd (x, 2) *= -1;
-  }
-  Eigen::Matrix3f R = v_svd * u_svd.transpose ();
-
-  // Compute translation
-  Eigen::Vector3f t = -R * centroid_mdl + centroid_tgt;
-
-  // Build rotation matrix
-  tf::Matrix3x3 rot(R(0,0), R(0,1), R(0,2),
-                    R(1,0), R(1,1), R(1,2),
-                    R(2,0), R(2,1), R(2,2));
- 
-  // Build the tf
-  tf::Vector3 trans(t(0), t(1), t(2));
-  tf::Transform tf_composed(rot, trans);
-  output = tf_composed;
+  // Compute the transformation
+  affineTf = valve_tracker::Utils::affine3Dtransformation(valve_model_points_, valve_target_points);
 
   // Compute error
-  double error = 0.0;
-  for (unsigned int j=0; j<valve_synthetic_points_.size(); j++)
-  {
-    tf::Vector3 p_mdl(valve_synthetic_points_[j].x,
-                      valve_synthetic_points_[j].y,
-                      valve_synthetic_points_[j].z);
-    tf::Vector3 p_tgt(tgt[j].x,
-                      tgt[j].y,
-                      tgt[j].z);
-    tf::Vector3 p_computed = output*p_mdl;
-    error += valve_tracker::Utils::euclideanDist(p_computed - p_tgt);
-  }
-  // Average error
-  error = error / valve_synthetic_points_.size();
-  ROS_DEBUG_STREAM("ERROR: " << error);
+  double error = valve_tracker::Utils::getTfError(affineTf,
+                                                  valve_model_points_,
+                                                  valve_target_points);
 
   // Apply a threshold over the error
   if (error > max_tf_error_)
   {
-    output.setIdentity();
+    affineTf.setIdentity();
+    ROS_WARN_STREAM("Affine transformation error is too big: " << error);
     return false;
   }
-  
+
   return true;
 }
 
@@ -563,4 +466,62 @@ cv::Mat valve_tracker::ValveTracker::calculateBackprojection(const cv::Mat& imag
          back_projection, ranges_hsv);
 
   return back_projection;
+}
+
+/** \brief Finds the root valve point using the model distances
+  * @return the index of the valve root in the input vector
+  * \param input vector of valve points
+  */
+int valve_tracker::ValveTracker::findValveRootPoint(std::vector<cv::Point3d> points_3d)
+{
+  // Compute the distance between root and one point of the valve
+  double point_to_root_dist = valve_tracker::Utils::euclideanDist(
+    valve_model_points_[1] - valve_model_points_[3]);
+
+  // Compute the distance between the real valve points
+  std::vector<double> error;
+  error.push_back(abs(point_to_root_dist - valve_tracker::Utils::euclideanDist(points_3d[0] - points_3d[1])));
+  error.push_back(abs(point_to_root_dist - valve_tracker::Utils::euclideanDist(points_3d[0] - points_3d[2])));
+  error.push_back(abs(point_to_root_dist - valve_tracker::Utils::euclideanDist(points_3d[1] - points_3d[2])));
+
+  // Find the root point
+  return (2 - *std::min_element(error.begin(), error.end()));  
+}
+
+/** \brief Match the target points to the model
+  * @return a vector with the 3D valve points re-sorted.
+  * \param input vector of valve points.
+  * \param true to inverse the valve symmetrical sides correspondences.
+  */
+std::vector<cv::Point3d> valve_tracker::ValveTracker::matchTgtMdlPoints(
+  std::vector<cv::Point3d> points_3d, bool inverse)
+{
+  // Target point cloud
+  std::vector<cv::Point3d> tgt;
+
+  // Get target root point
+  int idx_root = findValveRootPoint(points_3d);
+
+  // Compute target central point
+  static const int arr[] = {0, 1, 2};
+  std::vector<int> v (arr, arr + sizeof(arr) / sizeof(arr[0]));
+  v.erase(v.begin() + idx_root);
+  tgt.push_back(cv::Point3d( (points_3d[v[0]].x + points_3d[v[1]].x) / 2,
+                             (points_3d[v[0]].y + points_3d[v[1]].y) / 2,
+                             (points_3d[v[0]].z + points_3d[v[1]].z) / 2));
+
+  if ((points_3d[v[0]].x < points_3d[v[1]].x) != inverse)
+  {
+    tgt.push_back(cv::Point3d( points_3d[v[0]].x, points_3d[v[0]].y, points_3d[v[0]].z ));
+    tgt.push_back(cv::Point3d( points_3d[v[1]].x, points_3d[v[1]].y, points_3d[v[1]].z ));
+  }
+  else
+  {
+    tgt.push_back(cv::Point3d( points_3d[v[1]].x, points_3d[v[1]].y, points_3d[v[1]].z ));
+    tgt.push_back(cv::Point3d( points_3d[v[0]].x, points_3d[v[0]].y, points_3d[v[0]].z ));
+  }
+
+  tgt.push_back(cv::Point3d( points_3d[idx_root].x, points_3d[idx_root].y, points_3d[idx_root].z ));
+
+  return tgt;
 }

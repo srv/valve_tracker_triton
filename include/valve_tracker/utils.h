@@ -5,6 +5,7 @@
 #include <ros/ros.h>
 #include <ros/package.h>
 #include <tf/transform_broadcaster.h>
+#include <Eigen/Eigen>
 #include "opencv2/core/core.hpp"
 
 namespace valve_tracker
@@ -70,6 +71,94 @@ namespace valve_tracker
 		static std::string getPackageDir()
 		{
 		  return ros::package::getPath(ROS_PACKAGE_NAME);
+		}
+
+		/** \brief Computes the mathematical transformation between 2 set of points
+		  * @return transformation matrix
+		  * \param input vector of real valve points.
+		  */
+		static tf::Transform affine3Dtransformation(std::vector<cv::Point3d> pointcloud_1, 
+																								std::vector<cv::Point3d> pointcloud_2)
+		{
+		  // Compute centroids
+		  Eigen::Vector3f centroid_mdl(0.0, 0.0, 0.0);
+		  Eigen::Vector3f centroid_tgt(0.0, 0.0, 0.0);
+		  for (unsigned int i=0; i<pointcloud_1.size(); i++)
+		  {
+		    centroid_mdl(0) += pointcloud_1[i].x;
+		    centroid_mdl(1) += pointcloud_1[i].y;
+		    centroid_mdl(2) += pointcloud_1[i].z;
+		    centroid_tgt(0) += pointcloud_2[i].x;
+		    centroid_tgt(1) += pointcloud_2[i].y;
+		    centroid_tgt(2) += pointcloud_2[i].z;
+		  }
+		  centroid_mdl /= pointcloud_1.size();
+		  centroid_tgt /= pointcloud_2.size();
+
+		  // Compute H
+		  Eigen::Matrix3f H = Eigen::Matrix3f::Zero();
+		  for (unsigned int i=0; i<pointcloud_1.size(); i++)
+		  {
+		    Eigen::Vector3f p_mdl(pointcloud_1[i].x, pointcloud_1[i].y, pointcloud_1[i].z);
+		    Eigen::Vector3f p_tgt(pointcloud_2[i].x, pointcloud_2[i].y, pointcloud_2[i].z);
+
+		    Eigen::Vector3f v_mdl = p_mdl - centroid_mdl;
+		    Eigen::Vector3f v_tgt = p_tgt - centroid_tgt;
+
+		    H += v_mdl * v_tgt.transpose();
+		  }
+		  
+		  // Pseudo inverse
+		  Eigen::JacobiSVD<Eigen::Matrix3f> svdOfH(H, Eigen::ComputeFullU | Eigen::ComputeFullV);
+		  Eigen::Matrix3f u_svd = svdOfH.matrixU ();
+		  Eigen::Matrix3f v_svd = svdOfH.matrixV ();
+		  
+		  // Compute R = V * U'
+		  if (u_svd.determinant () * v_svd.determinant () < 0)
+		  {
+		    for (int x = 0; x < 3; ++x)
+		      v_svd (x, 2) *= -1;
+		  }
+		  Eigen::Matrix3f R = v_svd * u_svd.transpose ();
+
+		  // Compute translation
+		  Eigen::Vector3f t = -R * centroid_mdl + centroid_tgt;
+
+		  // Build rotation matrix
+		  tf::Matrix3x3 rot(R(0,0), R(0,1), R(0,2),
+		                    R(1,0), R(1,1), R(1,2),
+		                    R(2,0), R(2,1), R(2,2));
+		  
+		  // Build the tf
+		  tf::Vector3 trans(t(0), t(1), t(2));
+		  tf::Transform tf_composed(rot, trans);
+
+		  return tf_composed;
+		}
+
+		/** \brief Computes the error of the affine transformation
+		  * @return the average error
+		  */
+		static double getTfError(tf::Transform affineTf,
+														 std::vector<cv::Point3d> pointcloud_1, 
+														 std::vector<cv::Point3d> pointcloud_2)
+		{
+		  double error = 0.0;
+	    for (unsigned int j=0; j<pointcloud_1.size(); j++)
+	    {
+	      tf::Vector3 p_mdl(pointcloud_1[j].x,
+	                        pointcloud_1[j].y,
+	                        pointcloud_1[j].z);
+	      tf::Vector3 p_tgt(pointcloud_2[j].x,
+	                        pointcloud_2[j].y,
+	                        pointcloud_2[j].z);
+	      tf::Vector3 p_computed = affineTf*p_mdl;
+	      error += valve_tracker::Utils::euclideanDist(p_computed - p_tgt);
+	    }
+	    // Average error
+	    error = error / pointcloud_1.size();
+
+	    return error;
 		}
 
 	};
