@@ -1,10 +1,14 @@
 <launch>
+  
+  <arg name="stereo" default="stereo_down"/>
+  <arg name="image" default="image_rect_color"/>
+
   <node pkg="valve_tracker_triton" type="valve_trainer_node" name="valve_trainer" output="screen">
     <param name="num_hue_bins" value="16"/>
     <param name="num_sat_bins" value="16"/>
     <param name="num_val_bins" value="1"/>
 
-    <remap from="stereo" to="stereo_down"/>
-    <remap from="image" to="image_rect_color"/>
+    <remap from="stereo" to="$(arg stereo)"/>
+    <remap from="image" to="$(arg image)"/>
   </node>
 </launch>
