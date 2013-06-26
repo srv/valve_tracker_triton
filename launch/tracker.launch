@@ -1,5 +1,8 @@
 <launch>
 
+  <arg name="stereo" default="stereo_down"/>
+  <arg name="image" default="image_rect_color"/>
+
   <node pkg="valve_tracker_triton" type="valve_tracker_node" name="valve_tracker" output="screen">
     <param name="stereo_frame_id" value="/stereo_forward"/>
     <param name="opening_element_size" value="5"/>
@@ -13,10 +16,8 @@
     <!-- Load model -->
     <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />
 
-    <remap from="stereo" to="stereo_forward"/>
-    <remap from="image" to="image_rect_color"/>
+    <remap from="stereo" to="$(arg stereo)"/>
+    <remap from="image" to="$(arg image)"/>
 
   </node>
-
-
 </launch>
