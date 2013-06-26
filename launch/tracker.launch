@@ -1,0 +1,22 @@
+<launch>
+
+  <node pkg="valve_tracker_triton" type="valve_tracker_node" name="valve_tracker" output="screen">
+    <param name="stereo_frame_id" value="/stereo_forward"/>
+    <param name="opening_element_size" value="5"/>
+    <param name="closing_element_size" value="10"/>
+    <param name="epipolar_width_threshold" value="3"/>
+    <param name="binary_threshold" value="130"/>
+    <param name="min_value_threshold" value="50"/>
+    <param name="min_blob_size" value="5"/>
+    <param name="max_blob_size" value="150"/>
+
+    <!-- Load model -->
+    <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />
+
+    <remap from="stereo" to="stereo_forward"/>
+    <remap from="image" to="image_rect_color"/>
+
+  </node>
+
+
+</launch>

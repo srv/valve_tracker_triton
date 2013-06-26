@@ -269,7 +269,6 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   // debug purposes
   if (debug)
   {
-    
     for (size_t idx=0; idx<contours_filtered.size(); idx++)
     {
       cv::drawContours(contour_image, contours_filtered, idx, colors[idx % 3], 2);
@@ -291,7 +290,6 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
 
     cv::createTrackbar("min_blob_size", model_name + "-backprojection-contours",  &min_blob_size_, 255);
     cv::createTrackbar("max_blob_size", model_name + "-backprojection-contours",  &max_blob_size_, 255);
-
 
     cv::imshow(model_name + "-backprojection-contours", contour_image);
     cv::imshow(model_name + "-binary", binary);
@@ -536,7 +534,7 @@ bool valve_tracker::ValveTracker::estimateTransform(
     output.setIdentity();
     return false;
   }
-
+  
   return true;
 }
 
