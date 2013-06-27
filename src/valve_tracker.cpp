@@ -341,29 +341,40 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
     }
     else if (correspondences.size() > 1)
     {
-      // get all the left points in the same epipolar
-      std::vector<cv::Point2d> left_points;
-      std::vector<cv::Point2d> right_points;
-      for (size_t ii=0; ii<points_2d[0].size(); ii++)
-      { 
-        cv::Point2d pl2(points_2d[0][ii]);
-        double dist_y = abs(pl.y - pl2.y);
-        if (dist_y <= epipolar_width_threshold_) 
-        {
-          left_points.push_back(pl2);
-        }
-      }
-
       // Get all the right points in the same epipolar
-      for (size_t jj=0; jj<points_2d[1].size(); jj++)
+      std::vector<cv::Point2d> right_points;
+      for (size_t ii=0; ii<points_2d[1].size(); ii++)
       { 
-        cv::Point2d pr(points_2d[1][jj]);
+        cv::Point2d pr(points_2d[1][ii]);
         double dist_y = abs(pl.y - pr.y);
         if (dist_y <= epipolar_width_threshold_)
         {
           right_points.push_back(pr);
         }
       }
+
+      // Compute the left epipolar distances
+      std::vector<double> left_epipolar;
+      for (size_t jj=0; jj<points_2d[0].size(); jj++)
+      { 
+        cv::Point2d pl2(points_2d[0][jj]);
+        left_epipolar.push_back(abs(pl.y - pl2.y));
+      }
+
+      // Get the left points sorted by epipolar distance
+      std::vector<cv::Point2d> left_points = points_2d[0];
+      std::vector<cv::Point2d> left_sorted;
+      unsigned int offset = 0;
+      while(offset < right_points.size())
+      { 
+        std::vector<double>::iterator it = std::min_element(left_epipolar.begin(), left_epipolar.end());
+        int min_idx = std::distance(left_epipolar.begin(), it);
+        left_sorted.push_back(left_points[min_idx]);
+        left_epipolar.erase(left_epipolar.begin() + min_idx);
+        left_points.erase(left_points.begin() + min_idx);
+        offset++;
+      }
+      left_points = left_sorted;
 
       // Sort them and assign correspondences
       std::sort(left_points.begin(), left_points.end(), valve_tracker::Utils::sort_points_x);
@@ -379,6 +390,7 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
         // from right points
         cv::Point3d p;
         cv::Point2d pr(right_points[idx]);
+        ROS_INFO_STREAM("KK[" << i << "] " << correspondences << " | " << pl.x << " " << pr.x);
         stereo_model_.projectDisparityTo3d(pl, pl.x-pr.x, p);
         points3d.push_back(p);
         ROS_DEBUG("[ValveTracker:] Correspondence solved!");

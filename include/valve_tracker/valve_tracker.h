@@ -69,7 +69,6 @@ private:
     tf::Transform& output);                               //!> Transform estimation
   std::vector<cv::Point3d> matchTgtMdlPoints(
     std::vector<cv::Point3d> points_3d, bool inverse);    //!> Sort the target points
-  
 };
 
 } // namespace
