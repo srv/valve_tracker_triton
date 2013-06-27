@@ -67,13 +67,8 @@ private:
   bool estimateTransform(
     std::vector<cv::Point3d> points_3d,
     tf::Transform& output);                               //!> Transform estimation
-
-  cv::Mat calculateBackprojection(const cv::Mat& image,
-    const cv::MatND& histogram);                          //!> Computes the backprojection of an histogram into an image
-  int findValveRootPoint(
-    std::vector<cv::Point3d> points_3d);                  //!> Finds the root valve point.
   std::vector<cv::Point3d> matchTgtMdlPoints(
-  std::vector<cv::Point3d> points_3d, bool inverse);      //!> Sort the target points
+    std::vector<cv::Point3d> points_3d, bool inverse);    //!> Sort the target points
   
 };
 

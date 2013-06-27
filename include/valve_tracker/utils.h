@@ -161,6 +161,34 @@ namespace valve_tracker
 	    return error;
 		}
 
+		/** \brief Calculates the backprojection of the input image given the histogram
+			* @return the back-projected image
+		  * \param input image
+		  * \param input histogram
+		  */
+		static cv::Mat calculateBackprojection(const cv::Mat& image,
+		                                       const cv::MatND& histogram)
+		{
+		  // we assume that the image is a regular three channel image
+		  CV_Assert(image.type() == CV_8UC3);
+
+		  // channels for wich to compute the histogram (H, S and V)
+		  int channels[] = {0, 1, 2};
+
+		  // Ranges for the histogram
+		  float hue_ranges[] = {0, 180}; 
+		  float saturation_ranges[] = {0, 256};
+		  float value_ranges[] = {0, 256};
+		  const float* ranges_hsv[] = {hue_ranges, saturation_ranges, value_ranges};
+
+		  cv::Mat back_projection;
+		  int num_arrays = 1;
+		  cv::calcBackProject(&image, num_arrays, channels, histogram,
+		         back_projection, ranges_hsv);
+
+		  return back_projection;
+		}
+
 	};
 } // namespace
 

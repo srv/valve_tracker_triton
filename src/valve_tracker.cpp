@@ -159,7 +159,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   // Compute backprojection
   cv::Mat hsv_image;
   cv::cvtColor(image, hsv_image, CV_BGR2HSV);
-  cv::Mat backprojection = calculateBackprojection(hsv_image, trained_model_);
+  cv::Mat backprojection = valve_tracker::Utils::calculateBackprojection(hsv_image, trained_model_);
 
   // Used to draw the contours
   cv::Mat contour_image(backprojection.size(), CV_8UC3, cv::Scalar(0,0,0));
@@ -441,53 +441,6 @@ bool valve_tracker::ValveTracker::estimateTransform(
   return true;
 }
 
-/** \brief Calculates the backprojection of the input image given the histogram
-  * \param input image
-  * \param input histogram
-  */
-cv::Mat valve_tracker::ValveTracker::calculateBackprojection(const cv::Mat& image,
-                                                             const cv::MatND& histogram)
-{
-  // we assume that the image is a regular three channel image
-  CV_Assert(image.type() == CV_8UC3);
-
-  // channels for wich to compute the histogram (H, S and V)
-  int channels[] = {0, 1, 2};
-
-  // Ranges for the histogram
-  float hue_ranges[] = {0, 180}; 
-  float saturation_ranges[] = {0, 256};
-  float value_ranges[] = {0, 256};
-  const float* ranges_hsv[] = {hue_ranges, saturation_ranges, value_ranges};
-
-  cv::Mat back_projection;
-  int num_arrays = 1;
-  cv::calcBackProject(&image, num_arrays, channels, histogram,
-         back_projection, ranges_hsv);
-
-  return back_projection;
-}
-
-/** \brief Finds the root valve point using the model distances
-  * @return the index of the valve root in the input vector
-  * \param input vector of valve points
-  */
-int valve_tracker::ValveTracker::findValveRootPoint(std::vector<cv::Point3d> points_3d)
-{
-  // Compute the distance between root and one point of the valve
-  double point_to_root_dist = valve_tracker::Utils::euclideanDist(
-    valve_model_points_[1] - valve_model_points_[3]);
-
-  // Compute the distance between the real valve points
-  std::vector<double> error;
-  error.push_back(abs(point_to_root_dist - valve_tracker::Utils::euclideanDist(points_3d[0] - points_3d[1])));
-  error.push_back(abs(point_to_root_dist - valve_tracker::Utils::euclideanDist(points_3d[0] - points_3d[2])));
-  error.push_back(abs(point_to_root_dist - valve_tracker::Utils::euclideanDist(points_3d[1] - points_3d[2])));
-
-  // Find the root point
-  return (2 - *std::min_element(error.begin(), error.end()));  
-}
-
 /** \brief Match the target points to the model
   * @return a vector with the 3D valve points re-sorted.
   * \param input vector of valve points.
@@ -500,7 +453,16 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::matchTgtMdlPoints(
   std::vector<cv::Point3d> tgt;
 
   // Get target root point
-  int idx_root = findValveRootPoint(points_3d);
+  double distance = valve_tracker::Utils::euclideanDist(points_3d[0]);
+  int idx_root = 0;
+  for (unsigned int i=1; i<points_3d.size(); i++)
+  {
+    if(valve_tracker::Utils::euclideanDist(points_3d[i]) > distance)
+    {
+      distance = valve_tracker::Utils::euclideanDist(points_3d[i]);
+      idx_root = i;
+    }
+  }
 
   // Compute target central point
   static const int arr[] = {0, 1, 2};
