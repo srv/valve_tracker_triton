@@ -91,6 +91,7 @@ void valve_tracker::ValveTrainer::stereoImageCallback(
       // undergoing user interaction. nothing to do
       ROS_INFO_ONCE("Release the mouse button whenever you need.");
       image = training_image_.clone();
+      cv::rectangle(image, roi_rectangle_selection_, cv::Scalar(255,255,255),3);
       break;
     case ROI_SELECTED:
       // user interaction ended. 
@@ -105,13 +106,10 @@ void valve_tracker::ValveTrainer::stereoImageCallback(
       cv::FileStorage fs(trained_model_path_, cv::FileStorage::WRITE);
       fs << "model_histogram" << model_histogram_;
       fs.release();
+      training_status_ = DISPLAY_VIDEO;
       break;
   }
 
-  if (PAINTING)
-  {
-    cv::rectangle(image, roi_rectangle_selection_, cv::Scalar(255,255,255),3);
-  }
   cv::imshow("Training GUI", image);
   cv::waitKey(5);
 }
