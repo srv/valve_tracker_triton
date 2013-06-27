@@ -54,6 +54,8 @@ private:
   cv::Mat processed_;                               //!> Processed image
   image_geometry::StereoCameraModel stereo_model_;  //!> Camera model to compute the 3d world points
 
+  cv::Point3d valve_symmetric_point_;               //>! Used to track the valve symmetric points         
+
   void stereoImageCallback(
       const sensor_msgs::ImageConstPtr& l_image_msg,
       const sensor_msgs::ImageConstPtr& r_image_msg,

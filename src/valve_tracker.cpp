@@ -70,6 +70,9 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
 
   // Initialize the camera to valve transformation
   camera_to_valve_.setIdentity();
+
+  // Initialize the symmetric point tracker
+  valve_symmetric_point_ = cv::Point3d(0.0, 0.0, 0.0);
 }
 
 /** \brief Stereo Image Callback
@@ -390,7 +393,6 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
         // from right points
         cv::Point3d p;
         cv::Point2d pr(right_points[idx]);
-        ROS_INFO_STREAM("KK[" << i << "] " << correspondences << " | " << pl.x << " " << pr.x);
         stereo_model_.projectDisparityTo3d(pl, pl.x-pr.x, p);
         points3d.push_back(p);
         ROS_DEBUG("[ValveTracker:] Correspondence solved!");
@@ -425,9 +427,9 @@ bool valve_tracker::ValveTracker::estimateTransform(
   // Sanity check
   if (valve_3d_points.size() != 3)
   {
-    ROS_WARN_STREAM(  "[ValveTracker:] Impossible to estimate the transformation " << 
-                      "between camera and valve, wrong 3d correspondences size: " <<
-                      valve_3d_points.size());
+    ROS_WARN_STREAM("[ValveTracker:] Impossible to estimate the transformation " << 
+                    "between camera and valve, wrong 3d correspondences size: " <<
+                    valve_3d_points.size());
     return false;
   }
 
@@ -446,7 +448,7 @@ bool valve_tracker::ValveTracker::estimateTransform(
   if (error > max_tf_error_)
   {
     affineTf.setIdentity();
-    ROS_WARN_STREAM("Affine transformation error is too big: " << error);
+    ROS_WARN_STREAM("[ValveTracker:] Affine transformation error is too big: " << error);
     return false;
   }
 
@@ -484,18 +486,51 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::matchTgtMdlPoints(
                              (points_3d[v[0]].y + points_3d[v[1]].y) / 2,
                              (points_3d[v[0]].z + points_3d[v[1]].z) / 2));
 
-  if ((points_3d[v[0]].x < points_3d[v[1]].x) != inverse)
+  // Symmetrical sides tracker indices
+  int idx_track = 0;
+  int idx_no_track = 1;
+
+  if (valve_symmetric_point_.x == 0.0 &&
+      valve_symmetric_point_.y == 0.0 &&
+      valve_symmetric_point_.z == 0.0)
   {
-    tgt.push_back(cv::Point3d( points_3d[v[0]].x, points_3d[v[0]].y, points_3d[v[0]].z ));
-    tgt.push_back(cv::Point3d( points_3d[v[1]].x, points_3d[v[1]].y, points_3d[v[1]].z ));
+    // Tracker not initialized
+    if ((points_3d[v[0]].x < points_3d[v[1]].x) != inverse)
+    {
+      idx_track = 0;
+      idx_no_track = 1;
+    }
+    else
+    {
+      idx_track = 1;
+      idx_no_track = 0;
+    }
   }
   else
   {
-    tgt.push_back(cv::Point3d( points_3d[v[1]].x, points_3d[v[1]].y, points_3d[v[1]].z ));
-    tgt.push_back(cv::Point3d( points_3d[v[0]].x, points_3d[v[0]].y, points_3d[v[0]].z ));
+    // Tracker initialized, search the closest point
+    double dist1 = valve_tracker::Utils::euclideanDist(valve_symmetric_point_ - points_3d[v[0]]);
+    double dist2 = valve_tracker::Utils::euclideanDist(valve_symmetric_point_ - points_3d[v[1]]);
+    
+    if(dist1 <= dist2)
+    {
+      idx_track = 0;
+      idx_no_track = 1;
+    }
+    else
+    {
+      idx_track = 1;
+      idx_no_track = 0;
+    }
   }
 
+  // Mount the target points
+  tgt.push_back(cv::Point3d( points_3d[v[idx_track]].x, points_3d[v[idx_track]].y, points_3d[v[idx_track]].z ));
+  tgt.push_back(cv::Point3d( points_3d[v[idx_no_track]].x, points_3d[v[idx_no_track]].y, points_3d[v[idx_no_track]].z ));
   tgt.push_back(cv::Point3d( points_3d[idx_root].x, points_3d[idx_root].y, points_3d[idx_root].z ));
+
+  // Set the trakcer
+  valve_symmetric_point_ = tgt[1];
 
   return tgt;
 }
