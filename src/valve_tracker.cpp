@@ -268,7 +268,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   }
 
   // debug purposes
-  if (debug)
+  if (debug && !contour_image.empty())
   {
     for (size_t idx=0; idx<contours_filtered.size(); idx++)
     {
@@ -276,25 +276,40 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
       cv::circle(contour_image, points[idx], 15, color, 2);
     }
 
-    // Show images
-    std::string model_name = "valve";
-    cv::namedWindow(model_name + "-backprojection-contours", 0);
-    cv::namedWindow(model_name + "-binary", 0);
-    cv::namedWindow(model_name + "-binary-morphed", 0);
+    // Show images. First, convert to color
+    cv::Mat binary_color, binary_morphed_color;
+    cv::cvtColor(binary, binary_color, CV_GRAY2RGB);
+    cv::cvtColor(binary_morphed, binary_morphed_color, CV_GRAY2RGB);
 
-    cv::createTrackbar("mean_filter_size", model_name + "-binary",  &mean_filter_size_, 255);
-    cv::createTrackbar("binary_threshold", model_name + "-binary",  &binary_threshold_, 255);
+    // Concatenate horizontaly the images
+    cv::Mat display_image(contour_image.size(), CV_8UC3);
+    cv::hconcat(contour_image,binary_color,display_image);
+    cv::hconcat(display_image,binary_morphed_color,display_image);
 
-    cv::createTrackbar("closing_element_size", model_name + "-binary-morphed",  &closing_element_size_, 255);
-    cv::createTrackbar("opening_element_size", model_name + "-binary-morphed",  &opening_element_size_, 255);
-    cv::createTrackbar("min_value_threshold", model_name + "-binary-morphed",  &min_value_threshold_, 255);
+    // Create the window and the trackbars
+    std::string winname = "Valve Tracker GUI";
+    cv::namedWindow(winname, 0);
+    cv::createTrackbar("mean_filter_size", winname,  &mean_filter_size_, 255);
+    cv::createTrackbar("binary_threshold", winname,  &binary_threshold_, 255);
+    cv::createTrackbar("closing_element_size", winname,  &closing_element_size_, 255);
+    cv::createTrackbar("opening_element_size", winname,  &opening_element_size_, 255);
+    cv::createTrackbar("min_value_threshold", winname,  &min_value_threshold_, 255);
+    cv::createTrackbar("min_blob_size", winname,  &min_blob_size_, 255);
+    cv::createTrackbar("max_blob_size", winname,  &max_blob_size_, 255);
 
-    cv::createTrackbar("min_blob_size", model_name + "-backprojection-contours",  &min_blob_size_, 255);
-    cv::createTrackbar("max_blob_size", model_name + "-backprojection-contours",  &max_blob_size_, 255);
-
-    cv::imshow(model_name + "-backprojection-contours", contour_image);
-    cv::imshow(model_name + "-binary", binary);
-    cv::imshow(model_name + "-binary-morphed", binary_morphed);
+    // Get some reference values to position text in the image
+    cv::Size sz = contour_image.size();
+    int W = sz.width; // image width
+    //int H = sz.height; // image height
+    int scale = 2; // text scale
+    int thickness = 4; // text font thickness
+    int color = 255; // text colour (blue)
+    int W0 = 10; // initial width 
+    int H0 = 50; // initital height
+    cv::putText(display_image, "Contours", cv::Point(W0,H0), cv::FONT_HERSHEY_SIMPLEX, scale, color, thickness);
+    cv::putText(display_image, "Binarized", cv::Point(W+W0,H0), cv::FONT_HERSHEY_SIMPLEX, scale, color, thickness);
+    cv::putText(display_image, "Morph", cv::Point(2*W+W0,H0), cv::FONT_HERSHEY_SIMPLEX, scale, color, thickness);
+    cv::imshow(winname, display_image);
     cv::waitKey(5);
   }
   
