@@ -1,4 +1,4 @@
-#include "valve_tracker/valve_trainer.h"
+#include "valve_tracker/trainer.h"
 
 int main(int argc, char** argv)
 {
@@ -8,7 +8,7 @@ int main(int argc, char** argv)
   {
     ROS_WARN("'stereo' has not been remapped! "
              "Example command-line usage:\n"
-             "\t$ rosrun valve_tracker_triton valve_trainer_node"
+             "\t$ rosrun valve_tracker_triton trainer_node"
              "stereo:=/stereo_down image:=image_rect");
   }
 
@@ -20,7 +20,7 @@ int main(int argc, char** argv)
   }
 
   std::string transport = argc > 1 ? argv[1] : "raw";
-  valve_tracker::ValveTrainer vt_node(transport);
+  valve_tracker::Trainer vt_node(transport);
   ros::spin();
   return 0;
 }

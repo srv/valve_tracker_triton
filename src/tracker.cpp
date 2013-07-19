@@ -1,4 +1,4 @@
-#include "valve_tracker/valve_tracker.h"
+#include "valve_tracker/tracker.h"
 #include "valve_tracker/utils.h"
 #include <sensor_msgs/image_encodings.h>
 #include <cv_bridge/cv_bridge.h>
@@ -6,12 +6,23 @@
 #include <Eigen/Eigen>
 #include "opencv2/core/core.hpp"
 
-/** \brief ValveTracker constructor
+/** \brief Tracker constructor
   * \param transport
   */
-valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoImageProcessor(transport)
+valve_tracker::Tracker::Tracker(cv::MatND trained_model, 
+                                std::vector<cv::Point3d> valve_model, 
+                                image_geometry::StereoCameraModel stereo_model, 
+                                int epipolar_width_threshold) : StereoImageProcessor()
 {
-  ROS_INFO_STREAM("[ValveTracker:] Instantiating the Valve Tracker...");
+  // Setup the basic parameters
+  trained_model_ = trained_model;
+  valve_model_points_ = valve_model;
+  stereo_model_ = stereo_model;
+  epipolar_width_threshold_ = epipolar_width_threshold;
+}
+valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProcessor(transport)
+{
+  ROS_INFO_STREAM("[Tracker:] Instantiating the Valve Tracker...");
 
   // Get all the params out!
   ros::NodeHandle nhp("~");
@@ -28,9 +39,10 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   nhp.param("max_tf_error", max_tf_error_, 0.1);
   nhp.param("trained_model_path", trained_model_path_, 
       valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
-  nhp.param("show_debug", show_debug_, true);
+  nhp.param("show_debug", show_debug_, false);
+  nhp.param("warning_on", warning_on_, false);
 
-  ROS_INFO_STREAM("[ValveTracker:] Valve Tracker Settings:" << std::endl <<
+  ROS_INFO_STREAM("[Tracker:] Valve Tracker Settings:" << std::endl <<
                   "  stereo_frame_id            = " << stereo_frame_id_ << std::endl <<
                   "  valve_frame_id             = " << valve_frame_id_ << std::endl <<
                   "  closing_element_size       = " << closing_element_size_ << std::endl <<
@@ -59,7 +71,7 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
     valve_model_points_.push_back(p);
   }
 
-  // Read the trained histogram
+  // Read the trained model
   cv::FileStorage fs(trained_model_path_, cv::FileStorage::READ);
   fs["model_histogram"] >> trained_model_;
   fs.release();
@@ -73,6 +85,45 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
 
   // Initialize the symmetric point tracker
   valve_symmetric_point_ = cv::Point3d(0.0, 0.0, 0.0);
+
+  // Set the gui names
+  tuning_gui_name_ = "Valve Tracker Tuning";
+}
+
+/** \brief Show the current parameter set for console.
+  */
+void valve_tracker::Tracker::showParameterSet()
+{
+  ROS_INFO_STREAM("[Tracker:] Parameter set: [" <<
+                  mean_filter_size_ << ", " <<
+                  binary_threshold_ << ", " <<
+                  closing_element_size_ << ", " <<
+                  opening_element_size_ << ", " <<
+                  min_value_threshold_ << ", " <<
+                  min_blob_size_ << ", " <<
+                  max_blob_size_ << "]");
+}
+
+/** \brief Set a parameter
+  * \param name of the parameter
+  * \param value of the parameter
+  */
+void valve_tracker::Tracker::setParameter(std::string param_name, int param_value)
+{
+  if (param_name == "mean_filter_size") 
+    mean_filter_size_ = param_value;
+  else if (param_name == "binary_threshold") 
+    binary_threshold_ = param_value;
+  else if (param_name == "min_value_threshold")
+    min_value_threshold_ = param_value;
+  else if (param_name == "closing_element_size")
+    closing_element_size_ = param_value;
+  else if (param_name == "opening_element_size") 
+    opening_element_size_ = param_value;
+  else if (param_name == "min_blob_size")
+    min_blob_size_ = param_value;
+  else if (param_name == "max_blob_size")
+    max_blob_size_ = param_value;
 }
 
 /** \brief Stereo Image Callback
@@ -81,7 +132,7 @@ valve_tracker::ValveTracker::ValveTracker(const std::string transport) : StereoI
   * \param l_info_msg information message of the left image
   * \param r_info_msg information message of the right image
   */
-void valve_tracker::ValveTracker::stereoImageCallback(
+void valve_tracker::Tracker::stereoImageCallback(
   const sensor_msgs::ImageConstPtr     & l_image_msg,
   const sensor_msgs::ImageConstPtr     & r_image_msg,
   const sensor_msgs::CameraInfoConstPtr& l_info_msg,
@@ -100,7 +151,7 @@ void valve_tracker::ValveTracker::stereoImageCallback(
   }
   catch (cv_bridge::Exception& e)
   {
-    ROS_ERROR("[ValveTracker:] cv_bridge exception: %s", e.what());
+    ROS_ERROR("[Tracker:] cv_bridge exception: %s", e.what());
     return;
   }
 
@@ -124,15 +175,17 @@ void valve_tracker::ValveTracker::stereoImageCallback(
     {
       // Compute the transformation from camera to valve
       tf::Transform camera_to_valve_tmp;
-      bool success = estimateTransform(points3d, camera_to_valve_tmp);
+      double error = -1.0;
+      bool success = estimateTransform(points3d, camera_to_valve_tmp, error);
       if (success)
         camera_to_valve_ = camera_to_valve_tmp;
     }
   }
   else
   {
-    ROS_WARN_STREAM("[ValveTracker:] Incorrect number of valve points found (" << 
-                    points_2d[0].size() << " points) 3 needed.");
+    if (warning_on_)
+      ROS_WARN_STREAM("[Tracker:] Incorrect number of valve points found (" << 
+                      points_2d[0].size() << " points) 3 needed.");
   }
 
   // Publish processed image
@@ -154,7 +207,7 @@ void valve_tracker::ValveTracker::stereoImageCallback(
   * @return vector with the detected valve points
   * \param image where the valve will be detected
   */
-std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat image, bool debug)
+std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, bool debug)
 {
   // Initialize output
   std::vector<cv::Point2d> points;
@@ -212,7 +265,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
 
   if (contours.size() < 3)
   {
-    ROS_DEBUG_STREAM("[ValveTracker:] Not enought points detected: " << contours.size() << " (3 needed).");
+    ROS_DEBUG_STREAM("[Tracker:] Not enought points detected: " << contours.size() << " (3 needed).");
   }
   else
   {
@@ -234,7 +287,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
     // Check that we keep having at least 3 contours
     if (contours.size() < 3)
     {
-      ROS_DEBUG("[ValveTracker:] Blob filtering has removed too many blobs!");
+      ROS_DEBUG("[Tracker:] Blob filtering has removed too many blobs!");
     }
     else
     {
@@ -287,15 +340,15 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
     cv::hconcat(display_image,binary_morphed_color,display_image);
 
     // Create the window and the trackbars
-    std::string winname = "Valve Tracker GUI";
-    cv::namedWindow(winname, 0);
-    cv::createTrackbar("mean_filter_size", winname,  &mean_filter_size_, 255);
-    cv::createTrackbar("binary_threshold", winname,  &binary_threshold_, 255);
-    cv::createTrackbar("closing_element_size", winname,  &closing_element_size_, 255);
-    cv::createTrackbar("opening_element_size", winname,  &opening_element_size_, 255);
-    cv::createTrackbar("min_value_threshold", winname,  &min_value_threshold_, 255);
-    cv::createTrackbar("min_blob_size", winname,  &min_blob_size_, 255);
-    cv::createTrackbar("max_blob_size", winname,  &max_blob_size_, 255);
+    cv::namedWindow(tuning_gui_name_, 0);
+    cv::setWindowProperty(tuning_gui_name_, CV_WND_PROP_FULLSCREEN, CV_WINDOW_FULLSCREEN);
+    cv::createTrackbar("mean_filter_size", tuning_gui_name_,  &mean_filter_size_, 255);
+    cv::createTrackbar("binary_threshold", tuning_gui_name_,  &binary_threshold_, 255);
+    cv::createTrackbar("closing_element_size", tuning_gui_name_,  &closing_element_size_, 255);
+    cv::createTrackbar("opening_element_size", tuning_gui_name_,  &opening_element_size_, 255);
+    cv::createTrackbar("min_value_threshold", tuning_gui_name_,  &min_value_threshold_, 255);
+    cv::createTrackbar("min_blob_size", tuning_gui_name_,  &min_blob_size_, 255);
+    cv::createTrackbar("max_blob_size", tuning_gui_name_,  &max_blob_size_, 255);
 
     // Get some reference values to position text in the image
     cv::Size sz = contour_image.size();
@@ -309,7 +362,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
     cv::putText(display_image, "Contours", cv::Point(W0,H0), cv::FONT_HERSHEY_SIMPLEX, scale, color, thickness);
     cv::putText(display_image, "Binarized", cv::Point(W+W0,H0), cv::FONT_HERSHEY_SIMPLEX, scale, color, thickness);
     cv::putText(display_image, "Morph", cv::Point(2*W+W0,H0), cv::FONT_HERSHEY_SIMPLEX, scale, color, thickness);
-    cv::imshow(winname, display_image);
+    cv::imshow(tuning_gui_name_, display_image);
     cv::waitKey(5);
   }
   
@@ -320,7 +373,7 @@ std::vector<cv::Point2d> valve_tracker::ValveTracker::valveDetection(cv::Mat ima
   * @return vector with the 3D points of the valve
   * \param vector of left and right valve point detection
   */
-std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
+std::vector<cv::Point3d> valve_tracker::Tracker::triangulatePoints(
     std::vector< std::vector<cv::Point2d> > points_2d)
 {
   // Initialize output
@@ -329,7 +382,7 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
   // Sanity check
   if (points_2d[0].size() != 3 || points_2d[1].size() != 3)
   {
-    ROS_DEBUG_STREAM("[ValveTracker:] Incorrect number of valve points found (L:" << 
+    ROS_DEBUG_STREAM("[Tracker:] Incorrect number of valve points found (L:" << 
                       points_2d[0].size() << " R:" << points_2d[0].size() << 
                       " points) 3 needed.");
     return points3d;
@@ -355,7 +408,7 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
       cv::Point3d p;
       stereo_model_.projectDisparityTo3d(pl, pl.x-correspondences[0].x, p);
       points3d.push_back(p);
-      ROS_DEBUG("[ValveTracker:] 3D points added!");
+      ROS_DEBUG("[Tracker:] 3D points added!");
     }
     else if (correspondences.size() > 1)
     {
@@ -410,19 +463,21 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
         cv::Point2d pr(right_points[idx]);
         stereo_model_.projectDisparityTo3d(pl, pl.x-pr.x, p);
         points3d.push_back(p);
-        ROS_DEBUG("[ValveTracker:] Correspondence solved!");
+        ROS_DEBUG("[Tracker:] Correspondence solved!");
       }
       else
       {
         // It has not been found
-        ROS_WARN("[ValveTracker:] Correspondence could not be found.");
+        if (warning_on_)
+          ROS_WARN("[Tracker:] Correspondence could not be found.");
       }
     }
     else
     {
       // It has not been found
-      ROS_WARN_STREAM("[ValveTracker:] 0 correspondences found between left and " <<
-                "right images, consider increasing the parameter 'epipolar_width_threshold'.");
+      if (warning_on_)
+        ROS_WARN_STREAM("[Tracker:] 0 correspondences found between left and " <<
+                  "right images, consider increasing the parameter 'epipolar_width_threshold'.");
     }
   }
 
@@ -434,17 +489,18 @@ std::vector<cv::Point3d> valve_tracker::ValveTracker::triangulatePoints(
   * \param 3D points of the valve.
   * \param output transformation.
   */
-bool valve_tracker::ValveTracker::estimateTransform(
-    std::vector<cv::Point3d> valve_3d_points, tf::Transform& affineTf)
+bool valve_tracker::Tracker::estimateTransform(
+    std::vector<cv::Point3d> valve_3d_points, tf::Transform& affineTf, double &error)
 {
   affineTf.setIdentity();
 
   // Sanity check
   if (valve_3d_points.size() != 3)
   {
-    ROS_WARN_STREAM("[ValveTracker:] Impossible to estimate the transformation " << 
-                    "between camera and valve, wrong 3d correspondences size: " <<
-                    valve_3d_points.size());
+    if (warning_on_)
+      ROS_WARN_STREAM("[Tracker:] Impossible to estimate the transformation " << 
+                      "between camera and valve, wrong 3d correspondences size: " <<
+                      valve_3d_points.size());
     return false;
   }
 
@@ -455,15 +511,16 @@ bool valve_tracker::ValveTracker::estimateTransform(
   affineTf = valve_tracker::Utils::affine3Dtransformation(valve_model_points_, valve_target_points);
 
   // Compute error
-  double error = valve_tracker::Utils::getTfError(affineTf,
-                                                  valve_model_points_,
-                                                  valve_target_points);
+  error = valve_tracker::Utils::getTfError(affineTf,
+                                           valve_model_points_,
+                                           valve_target_points);
 
   // Apply a threshold over the error
   if (error > max_tf_error_)
   {
     affineTf.setIdentity();
-    ROS_WARN_STREAM("[ValveTracker:] Affine transformation error is too big: " << error);
+    if (warning_on_)
+      ROS_WARN_STREAM("[Tracker:] Affine transformation error is too big: " << error);
     return false;
   }
 
@@ -475,7 +532,7 @@ bool valve_tracker::ValveTracker::estimateTransform(
   * \param input vector of valve points.
   * \param true to inverse the valve symmetrical sides correspondences.
   */
-std::vector<cv::Point3d> valve_tracker::ValveTracker::matchTgtMdlPoints(
+std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
   std::vector<cv::Point3d> points_3d, bool inverse)
 {
   // Target point cloud

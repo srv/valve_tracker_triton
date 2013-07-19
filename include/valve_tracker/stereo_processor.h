@@ -90,6 +90,7 @@ protected:
    * callbacks.
    * \param transport The image transport to use
    */
+  StereoImageProcessor() {}
   StereoImageProcessor(const std::string& transport) :
     left_received_(0), right_received_(0), left_info_received_(0), right_info_received_(0), all_received_(0)
   {

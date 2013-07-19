@@ -1,9 +1,9 @@
 <launch>
   
-  <arg name="stereo" default="stereo_down"/>
+  <arg name="stereo" default="stereo_forward"/>
   <arg name="image" default="image_rect_color"/>
 
-  <node pkg="valve_tracker_triton" type="valve_trainer_node" name="valve_trainer" output="screen">
+  <node pkg="valve_tracker_triton" type="trainer_node" name="valve_trainer" output="screen">
     <param name="num_hue_bins" value="16"/>
     <param name="num_sat_bins" value="16"/>
     <param name="num_val_bins" value="1"/>

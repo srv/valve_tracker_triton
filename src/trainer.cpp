@@ -1,16 +1,16 @@
 #include <algorithm>
 #include <cv_bridge/cv_bridge.h>
-#include "valve_tracker/valve_trainer.h"
+#include "valve_tracker/trainer.h"
 #include "valve_tracker/utils.h"
 
 using namespace std;
 
-/** \brief ValveTrainer constructor
+/** \brief Trainer constructor
   * \param transport
   */
-valve_tracker::ValveTrainer::ValveTrainer(const std::string transport) : StereoImageProcessor(transport)
+valve_tracker::Trainer::Trainer(const std::string transport) : StereoImageProcessor(transport)
 {
-  ROS_INFO_STREAM("[ValveTrainer:] Instantiating the Valve Trainer...");
+  ROS_INFO_STREAM("[Trainer:] Instantiating the Valve Trainer...");
 
   // Get all the params out!
   ros::NodeHandle nhp("~");
@@ -21,7 +21,7 @@ valve_tracker::ValveTrainer::ValveTrainer(const std::string transport) : StereoI
   nhp.param("trained_model_path", trained_model_path_, 
       valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
 
-  ROS_INFO_STREAM("[ValveTrainer:] Valve Trainer Settings:" << std::endl <<
+  ROS_INFO_STREAM("[Trainer:] Valve Trainer Settings:" << std::endl <<
                   "  trained_model_path   = " << trained_model_path_ << std::endl <<
                   "  num_hue_bins         = " << num_hue_bins_ << std::endl <<
                   "  num_sat_bins         = " << num_sat_bins_ << std::endl <<
@@ -32,10 +32,10 @@ valve_tracker::ValveTrainer::ValveTrainer(const std::string transport) : StereoI
 
   // OpenCV image windows for debugging
   cv::namedWindow("Training GUI", 0);
-  cv::setMouseCallback("Training GUI", &valve_tracker::ValveTrainer::staticMouseCallback, this);
+  cv::setMouseCallback("Training GUI", &valve_tracker::Trainer::staticMouseCallback, this);
 }
 
-valve_tracker::ValveTrainer::~ValveTrainer()
+valve_tracker::Trainer::~Trainer()
 {
   cv::destroyWindow("Training GUI");
 }
@@ -46,7 +46,7 @@ valve_tracker::ValveTrainer::~ValveTrainer()
   * \param l_info_msg information message of the left image
   * \param r_info_msg information message of the right image
   */
-void valve_tracker::ValveTrainer::stereoImageCallback(
+void valve_tracker::Trainer::stereoImageCallback(
   const sensor_msgs::ImageConstPtr     & l_image_msg,
   const sensor_msgs::ImageConstPtr     & r_image_msg,
   const sensor_msgs::CameraInfoConstPtr& l_info_msg,
@@ -65,7 +65,7 @@ void valve_tracker::ValveTrainer::stereoImageCallback(
   }
   catch (cv_bridge::Exception& e)
   {
-    ROS_ERROR("[ValveTrainer:] cv_bridge exception: %s", e.what());
+    ROS_ERROR("[Trainer:] cv_bridge exception: %s", e.what());
     return;
   }
 
@@ -118,7 +118,7 @@ void valve_tracker::ValveTrainer::stereoImageCallback(
   * \param image where the valve will be detected
   * \param type indicates if the image belongs to the left or right camera frame
   */
-cv::MatND valve_tracker::ValveTrainer::train(const cv::Mat& image)
+cv::MatND valve_tracker::Trainer::train(const cv::Mat& image)
 {
 
   cv::Mat hsv_image(image.size(), CV_8UC3);
@@ -178,10 +178,10 @@ cv::MatND valve_tracker::ValveTrainer::train(const cv::Mat& image)
   * \param flags not used
   * \param input params. Need to be correctly re-caster to work
   */
-void valve_tracker::ValveTrainer::staticMouseCallback(int event, int x, int y, int flags, void* param)
+void valve_tracker::Trainer::staticMouseCallback(int event, int x, int y, int flags, void* param)
 {
   // extract this pointer and call function on object
-  ValveTrainer* vt = reinterpret_cast<ValveTrainer*>(param);
+  Trainer* vt = reinterpret_cast<Trainer*>(param);
   assert(vt != NULL);
   vt->mouseCallback(event, x, y, flags, 0);
 }
@@ -193,7 +193,7 @@ void valve_tracker::ValveTrainer::staticMouseCallback(int event, int x, int y, i
   * \param flags not used
   * \param input params. Need to be correctly re-caster to work
   */
-void valve_tracker::ValveTrainer::mouseCallback( int event, int x, int y, int flags, void* param)
+void valve_tracker::Trainer::mouseCallback( int event, int x, int y, int flags, void* param)
 {
   // check in which training status we are
   switch( training_status_ )
@@ -203,7 +203,7 @@ void valve_tracker::ValveTrainer::mouseCallback( int event, int x, int y, int fl
       if (event == CV_EVENT_LBUTTONDOWN)
       {
         training_status_ = AWAITING_TRAINING_IMAGE; 
-        ROS_INFO("[ValveTrainer:] Training image selected! Please draw a rectangle on the image.");
+        ROS_INFO("[Trainer:] Training image selected! Please draw a rectangle on the image.");
       }
       break;
     case SHOWING_TRAINING_IMAGE:
@@ -240,7 +240,7 @@ void valve_tracker::ValveTrainer::mouseCallback( int event, int x, int y, int fl
   * \param number of bins where to classify the histogram
   * \param mask of the selected ROI
   */
-cv::MatND valve_tracker::ValveTrainer::calculateHistogram(const cv::Mat& image, 
+cv::MatND valve_tracker::Trainer::calculateHistogram(const cv::Mat& image, 
                                                           const int bins[],  
                                                           const cv::Mat& mask)
 {   
@@ -271,7 +271,7 @@ cv::MatND valve_tracker::ValveTrainer::calculateHistogram(const cv::Mat& image,
   * \param name of the HS image window
   * \param name of the HV image window
   */
-void valve_tracker::ValveTrainer::showHSVHistogram(const cv::MatND& histogram,
+void valve_tracker::Trainer::showHSVHistogram(const cv::MatND& histogram,
                                                    const std::string& name_hs, 
                                                    const std::string& name_hv)
 {

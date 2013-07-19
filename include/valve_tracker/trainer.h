@@ -3,8 +3,8 @@
  * @brief Valve trainer presentation.
  */
 
-#ifndef VALVE_TRAINER_H
-#define VALVE_TRAINER_H
+#ifndef TRAINER_H
+#define TRAINER_H
 
 #include <ros/ros.h>
 #include <opencv2/opencv.hpp>
@@ -12,7 +12,7 @@
 #include <image_geometry/stereo_camera_model.h>
 
 #include "valve_tracker/stereo_processor.h"
-#include "valve_tracker/valve_trainer.h"
+#include "valve_tracker/trainer.h"
 
 #define LEFT 0
 #define RIGHT 1
@@ -20,7 +20,7 @@
 namespace valve_tracker
 {
 
-class ValveTrainer : public StereoImageProcessor
+class Trainer : public StereoImageProcessor
 {
 
 public:
@@ -38,11 +38,11 @@ public:
 
 	cv::Mat image; //!> showing image
 
-  // Constructor
-  ValveTrainer(const std::string transport);
+  // Constructors
+  Trainer(const std::string transport);
 
   // Destructor
-  ~ValveTrainer();
+  ~Trainer();
 
 private:
 
@@ -80,4 +80,4 @@ private:
 
 } // namespace
 
-#endif // VALVE_TRACKER_H
+#endif // TRACKER_H

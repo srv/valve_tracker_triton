@@ -1,0 +1,311 @@
+#include "valve_tracker/tracker.h"
+#include "valve_tracker/utils.h"
+#include <sensor_msgs/image_encodings.h>
+#include <cv_bridge/cv_bridge.h>
+#include <tf/transform_broadcaster.h>
+#include <Eigen/Eigen>
+#include "opencv2/core/core.hpp"
+#include <message_filters/subscriber.h>
+#include <message_filters/time_synchronizer.h>
+#include <message_filters/sync_policies/exact_time.h>
+#include <image_transport/subscriber_filter.h>
+#include <image_geometry/stereo_camera_model.h>
+
+namespace valve_tracker
+{
+
+class NodeAutotuning
+{
+
+public:
+
+  /** \brief Autotuning constructor
+    * \param transport
+    */
+  NodeAutotuning(ros::NodeHandle nh, ros::NodeHandle nhp) : nh_(), nh_priv_("~")
+  {
+    ROS_INFO_STREAM("[NodeAutotuning:] Instantiating the Autotuning node...");
+
+    // Topics subscriptions
+    std::string left_topic, right_topic, left_info_topic, right_info_topic;
+    nhp.param("left_topic", left_topic, std::string("/left/image_rect_color"));
+    nhp.param("right_topic", right_topic, std::string("/right/image_rect_color"));
+    nhp.param("left_info_topic", left_info_topic, std::string("/left/camera_info"));
+    nhp.param("right_info_topic", right_info_topic, std::string("/right/camera_info"));
+    image_transport::ImageTransport it(nh);
+    left_sub_ .subscribe(it, left_topic, 1);
+    right_sub_.subscribe(it, right_topic, 1);
+    left_info_sub_.subscribe(nh, left_info_topic, 1);
+    right_info_sub_.subscribe(nh, right_info_topic, 1);
+
+    // Callback syncronization
+    exact_sync_.reset(new ExactSync(ExactPolicy(2),
+                                    left_sub_, 
+                                    right_sub_, 
+                                    left_info_sub_, 
+                                    right_info_sub_) );
+    exact_sync_->registerCallback(boost::bind(&valve_tracker::NodeAutotuning::msgsCallback, 
+                                              this, _1, _2, _3, _4));
+
+    // Load the model
+    XmlRpc::XmlRpcValue model;
+    int cols, rows;
+    nhp.getParam("model_matrix/cols", cols);
+    nhp.getParam("model_matrix/rows", rows);
+    nhp.getParam("model_matrix/data", model);
+    ROS_ASSERT(model.getType() == XmlRpc::XmlRpcValue::TypeArray);
+    ROS_ASSERT(model.size() == cols*rows);
+    for (int i=0; i<model.size(); i=i+3)
+    {
+      ROS_ASSERT(model[i].getType() == XmlRpc::XmlRpcValue::TypeDouble);
+      cv::Point3d p((double)model[i], (double)model[i+1], (double)model[i+2]);
+      valve_model_points_.push_back(p);
+    }
+
+    // Read the trained model
+    nhp.param("trained_model_path", trained_model_path_, 
+      valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
+    cv::FileStorage fs(trained_model_path_, cv::FileStorage::READ);
+    fs["model_histogram"] >> trained_model_;
+    fs.release();
+
+    // Read the tuning intervals for the parameters
+    XmlRpc::XmlRpcValue param_list;
+    nhp.getParam("tuning_parameters", param_list);
+    ROS_ASSERT(param_list.getType() == XmlRpc::XmlRpcValue::TypeArray);
+    for (int i=0; i<param_list.size(); i++)
+    {
+      ROS_ASSERT(param_list[i].getType() == XmlRpc::XmlRpcValue::TypeStruct);
+      parameter_names_.push_back(static_cast<std::string>(param_list[i]["name"]).c_str());
+      int value = (int)param_list[i]["min_value"];
+      int max_value = (int)param_list[i]["max_value"];
+      int step = (int)param_list[i]["step"];
+      std::vector<int> param_iters;
+      while(value <= max_value)
+      {
+        param_iters.push_back(value);
+        value += step;
+      }
+      parameters_table_.push_back(param_iters);
+    }
+
+    // Some other parameters
+    nhp.param("epipolar_width_threshold", epipolar_width_threshold_, 3);
+
+    // Create the table of all posible combinations
+    std::vector<int> combinations;
+    std::vector< std::vector<int> > result;
+    valve_tracker::Utils::createCombinations(parameters_table_, 0, combinations, result);
+    parameters_table_ = result;
+
+    // Window to select the image for tuning
+    selector_gui_name_ = "Select Image for Tuning";
+    cv::namedWindow(selector_gui_name_, 0);
+    cv::setMouseCallback(selector_gui_name_, &valve_tracker::NodeAutotuning::staticMouseCallback, this);
+
+    // Initialize autotuning
+    image_selected_ = false;
+  }
+
+  /** \brief Messages callback. This function is called when syncronized images are received.
+    */
+  void msgsCallback(const sensor_msgs::ImageConstPtr& l_img,
+                    const sensor_msgs::ImageConstPtr& r_img,
+                    const sensor_msgs::CameraInfoConstPtr& l_info,
+                    const sensor_msgs::CameraInfoConstPtr& r_info)
+  {
+    // When image for tuning have been selected do nothing.
+    if(image_selected_) return;
+
+    // Get the camera model
+    stereo_model_.fromCameraInfo(l_info, r_info);
+
+    // Images to opencv
+    cv_bridge::CvImagePtr l_cv_image_ptr;
+    cv_bridge::CvImagePtr r_cv_image_ptr;
+    try
+    {
+      l_cv_image_ptr = cv_bridge::toCvCopy(l_img,
+                                           sensor_msgs::image_encodings::BGR8);
+      r_cv_image_ptr = cv_bridge::toCvCopy(r_img,
+                                           sensor_msgs::image_encodings::BGR8);
+    }
+    catch (cv_bridge::Exception& e)
+    {
+      ROS_ERROR("[NodeAutotuning:] cv_bridge exception: %s", e.what());
+      return;
+    }
+
+    l_image_ = l_cv_image_ptr->image.clone();
+    r_image_ = r_cv_image_ptr->image.clone();
+
+    // Show the image and wait until click
+    cv::imshow(selector_gui_name_, l_image_);
+    cv::waitKey(5);
+  }
+
+  /** \brief static function version of mouseCallback
+    * \param mouse event (left button down/up...)
+    * \param x mouse position
+    * \param y mouse position
+    * \param flags not used
+    * \param input params. Need to be correctly re-caster to work
+    */
+  static void staticMouseCallback(int event, int x, int y, int flags, void* param)
+  {
+    // extract this pointer and call function on object
+    NodeAutotuning* vt = reinterpret_cast<NodeAutotuning*>(param);
+    assert(vt != NULL);
+    vt->mouseCallback(event, x, y, flags, 0);
+  }
+
+  /** \brief Mouse callback for training
+    * \param mouse event (left button down/up...)
+    * \param x mouse position
+    * \param y mouse position
+    * \param flags not used
+    * \param input params. Need to be correctly re-caster to work
+    */
+  void mouseCallback( int event, int x, int y, int flags, void* param)
+  {
+    // if we press on the image, freeze it
+    if (event == CV_EVENT_LBUTTONDOWN)
+    {
+      ROS_INFO("[NodeAutotuning:] Tuning image selected.");
+      image_selected_ = true;
+
+      // Close window
+      cv::destroyWindow(selector_gui_name_);
+
+      // Launch the autotuning process in other thread
+      boost::thread autoTuningThread(&valve_tracker::NodeAutotuning::autotuning, this);
+    }
+  }
+
+  /** \brief Autotuning process
+    */
+  void autotuning()
+  {
+    // Create new instance of valve detection
+    valve_tracker::Tracker tracker(trained_model_, 
+                                   valve_model_points_, 
+                                   stereo_model_, 
+                                   epipolar_width_threshold_);
+
+    // Loop through the table of combinations
+    for (size_t i=0; i<parameters_table_.size(); i++)
+    {
+      // Sanity check
+      ROS_ASSERT(parameters_table_[i].size() == parameter_names_.size());
+
+      // Loop through every parameter for this combination
+      for (size_t j=0; j<parameters_table_[i].size(); j++)
+      {
+        // Change the parameter
+        tracker.setParameter(parameter_names_[j], parameters_table_[i][j]);
+      }
+
+      // Log
+      tracker.showParameterSet();
+
+      // Detect the valve
+      std::vector< std::vector<cv::Point2d> > points_2d;
+      points_2d.push_back(tracker.valveDetection(l_image_, true));
+      points_2d.push_back(tracker.valveDetection(r_image_, false));
+
+      // Valve is defined by 3 points
+      double error = std::numeric_limits<double>::max();
+      if (points_2d[0].size() == 3 || points_2d[1].size() == 3)
+      {
+        // Triangulate the 3D points
+        std::vector<cv::Point3d> points3d;
+        points3d = tracker.triangulatePoints(points_2d);
+        
+        ROS_INFO_STREAM("Point3d SIZE: " << points3d.size());
+        // Compute the 3D points of the valve
+        if(points3d.size() == 3)
+        {
+          // Compute the transformation from camera to valve
+          tf::Transform camera_to_valve_tmp;
+          tracker.estimateTransform(points3d, camera_to_valve_tmp, error);
+        }
+      }
+      ROS_INFO_STREAM("[NodeAutotuning:] TF ERROR: " << error);
+      error_list_.push_back(error);
+    }
+
+    // Get the minimum error idx
+    double min_val = *std::min_element(error_list_.begin(), error_list_.end());
+    int min_idx = std::min_element(error_list_.begin(), error_list_.end()) - error_list_.begin() + 1;
+
+    // Show the images with the best set of parameters
+    for (size_t l=0; l<parameter_names_.size(); l++)
+    {
+      // Change the parameter
+      tracker.setParameter(parameter_names_[l], parameters_table_[min_idx][l]);
+    }
+    tracker.valveDetection(l_image_, true);
+
+    // Show the best value
+    ROS_INFO("[NodeAutotuning:] **********************************************");
+    ROS_INFO_STREAM("[NodeAutotuning:] Mimimum error achieved is: " << min_val);
+    ROS_INFO("[NodeAutotuning:] Using the parameter set:");
+    for (size_t k=0; k<parameter_names_.size(); k++)
+    {
+      ROS_INFO_STREAM("[NodeAutotuning:]   - " << parameter_names_[k] << ": " << 
+                      parameters_table_[min_idx][k]);
+    }
+    ROS_INFO("[NodeAutotuning:] **********************************************");
+  }
+
+protected:
+
+    // Node handlers
+    ros::NodeHandle nh_;
+    ros::NodeHandle nh_priv_;
+
+private:
+
+  cv::Mat l_image_; //!> Showing image.
+  cv::Mat r_image_; //!> Showing image.
+
+  std::string trained_model_path_;                  //!> String for the path of trained model.
+  std::vector< std::vector<int> > parameters_table_;//!> Table of possible combinations to be tuned.
+  std::vector<std::string> parameter_names_;        //!> List of names to be tuned.
+  std::string selector_gui_name_;                   //!> Name for the GUI of the selector window.
+  std::string tuning_gui_name_;                     //!> Name for the GUI of the valve detection.
+  bool image_selected_;                             //!> True when image for tuning have been selected.
+  cv::MatND trained_model_;                         //!> Trained model.
+  std::vector<cv::Point3d> valve_model_points_;     //!> 3D synthetic valve points.
+  image_geometry::StereoCameraModel stereo_model_;  //!> Camera model to compute the 3d world points.
+  std::vector<double> error_list_;                  //!> List of errors for every combination.
+  int epipolar_width_threshold_;                    //!> For epipolar threshold filtering.
+
+  // Topic properties
+  image_transport::SubscriberFilter left_sub_, right_sub_;
+  message_filters::Subscriber<sensor_msgs::CameraInfo> left_info_sub_, right_info_sub_;
+
+  // Topic sync properties
+  typedef message_filters::sync_policies::ExactTime<sensor_msgs::Image, 
+                                                    sensor_msgs::Image, 
+                                                    sensor_msgs::CameraInfo, 
+                                                    sensor_msgs::CameraInfo> ExactPolicy;
+  typedef message_filters::Synchronizer<ExactPolicy> ExactSync;
+  boost::shared_ptr<ExactSync> exact_sync_;
+
+};
+
+} // namespace
+
+int main(int argc, char** argv)
+{
+  ros::init(argc, argv, "node_autotuning");
+
+  ros::NodeHandle nh;
+  ros::NodeHandle nh_private("~");
+  valve_tracker::NodeAutotuning autotuning(nh,nh_private);
+
+  ros::spin();
+  return 0;
+}
+

@@ -33,10 +33,14 @@ include_directories(${Eigen_INCLUDE_DIRS})
 #rosbuild_add_executable(example examples/example.cpp)
 #target_link_libraries(example ${PROJECT_NAME})
 
-rosbuild_add_executable(valve_tracker_node src/valve_tracker_node.cpp
-                                           src/valve_tracker.cpp)
-rosbuild_link_boost(valve_tracker_node signals)
+rosbuild_add_executable(tracker_node src/node_tracker.cpp
+                                     src/tracker.cpp)
+rosbuild_link_boost(tracker_node signals)
 
-rosbuild_add_executable(valve_trainer_node src/valve_trainer_node.cpp
-                                           src/valve_trainer.cpp)
-rosbuild_link_boost(valve_trainer_node signals)
+rosbuild_add_executable(trainer_node src/node_trainer.cpp
+                                     src/trainer.cpp)
+rosbuild_link_boost(trainer_node signals)
+
+rosbuild_add_executable(autotuning_node src/node_autotuning.cpp
+										src/tracker.cpp)
+rosbuild_link_boost(autotuning_node signals)
