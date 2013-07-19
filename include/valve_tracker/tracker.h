@@ -32,7 +32,9 @@ public:
 
   // Public functions
   std::vector<cv::Point2d> valveDetection(
-    cv::Mat img, bool debug);                             //!> Valve detection
+    cv::Mat image, bool debug);                           //!> Valve detection
+  std::vector<cv::Point2d> valveDetection(
+    cv::Mat image, bool debug, int &contours_size);       //!> Valve detection
   std::vector<cv::Point3d> triangulatePoints(
     std::vector< std::vector<cv::Point2d> > points_2d);   //!> Valve points triangulization
   bool estimateTransform(

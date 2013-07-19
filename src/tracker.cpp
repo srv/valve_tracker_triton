@@ -209,6 +209,11 @@ void valve_tracker::Tracker::stereoImageCallback(
   */
 std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, bool debug)
 {
+  int contours_size = 0;
+  return valveDetection(image, debug, contours_size);
+}
+std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, bool debug, int &contours_size)
+{
   // Initialize output
   std::vector<cv::Point2d> points;
 
@@ -299,10 +304,12 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
       contours_filtered = contours_tmp;
 
       // Sort from left to right and from top to bottom
-
-
+      contours_size = 0;
       for (size_t i = 0; i < contours_filtered.size(); i++)
       {
+        // Calculate contours size
+        contours_size += contours_filtered[i].size();
+
         // Calculate mean points
         double u_mean = 0;
         double v_mean = 0;

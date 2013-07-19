@@ -1,0 +1,18 @@
+<launch>
+
+  <arg name="camera" default="/stereo_forward"/>
+  <arg name="image" default="image_rect_color"/>
+
+  <node pkg="valve_tracker_triton" type="autotuning_node" name="autotuning_node" output="screen">
+      <param name="left_topic" value="$(arg camera)/left/$(arg image)"/>
+      <param name="right_topic" value="$(arg camera)/right/$(arg image)"/>
+      <param name="left_info_topic" value="$(arg camera)/left/camera_info"/>
+      <param name="right_info_topic" value="$(arg camera)/right/camera_info"/>
+      <param name="maximum_allowed_error" value="0.01"/>
+
+      <!-- Load model -->
+      <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />
+      <rosparam command="load" file="$(find valve_tracker_triton)/etc/tuning_parameters.yaml" />
+  </node>
+  
+</launch>

@@ -91,6 +91,8 @@ public:
 
     // Some other parameters
     nhp.param("epipolar_width_threshold", epipolar_width_threshold_, 3);
+    nhp.param("maximum_allowed_error", maximum_allowed_error_, 0.001); 
+    nhp.param("save_tuned_parameters", save_tuned_parameters_, true);
 
     // Create the table of all posible combinations
     std::vector<int> combinations;
@@ -200,18 +202,20 @@ public:
 
       // Loop through every parameter for this combination
       for (size_t j=0; j<parameters_table_[i].size(); j++)
-      {
-        // Change the parameter
         tracker.setParameter(parameter_names_[j], parameters_table_[i][j]);
-      }
 
       // Log
       tracker.showParameterSet();
 
       // Detect the valve
-      std::vector< std::vector<cv::Point2d> > points_2d;
-      points_2d.push_back(tracker.valveDetection(l_image_, true));
-      points_2d.push_back(tracker.valveDetection(r_image_, false));
+      int l_contours_size = 0;
+      int r_contours_size = 0;
+      int mean_contours = 0;
+      std::vector< std::vector<cv::Point2d> > points_2d;      
+      points_2d.push_back(tracker.valveDetection(l_image_, true, l_contours_size));
+      points_2d.push_back(tracker.valveDetection(r_image_, false, r_contours_size));
+      mean_contours = abs((l_contours_size + r_contours_size)/2);
+      contours_size_list_.push_back(mean_contours);
 
       // Valve is defined by 3 points
       double error = std::numeric_limits<double>::max();
@@ -221,7 +225,6 @@ public:
         std::vector<cv::Point3d> points3d;
         points3d = tracker.triangulatePoints(points_2d);
         
-        ROS_INFO_STREAM("Point3d SIZE: " << points3d.size());
         // Compute the 3D points of the valve
         if(points3d.size() == 3)
         {
@@ -230,31 +233,60 @@ public:
           tracker.estimateTransform(points3d, camera_to_valve_tmp, error);
         }
       }
-      ROS_INFO_STREAM("[NodeAutotuning:] TF ERROR: " << error);
+      ROS_INFO_STREAM("[NodeAutotuning:] Blob contours size: " << mean_contours);
+      ROS_INFO_STREAM("[NodeAutotuning:] Transformation error: " << error);
       error_list_.push_back(error);
     }
 
-    // Get the minimum error idx
-    double min_val = *std::min_element(error_list_.begin(), error_list_.end());
-    int min_idx = std::min_element(error_list_.begin(), error_list_.end()) - error_list_.begin() + 1;
+    // Give me all the indices with minimum errors
+    std::vector<int> contours_list_red_;
+    std::vector<int> contours_list_red_idx;
+    for (size_t i=0; i<error_list_.size(); i++)
+    {
+      if (error_list_[i] < maximum_allowed_error_)
+      {
+        contours_list_red_.push_back(contours_size_list_[i]);
+        contours_list_red_idx.push_back(i);
+      }
+    }
+
+    if (contours_list_red_.size() == 0)
+    {
+      ROS_INFO_STREAM("[NodeAutotuning:] Autotuning could not find a set of parameters " <<
+                      "to achive an error smaller than " << maximum_allowed_error_);
+      return;
+    }
+
+    // Find max contour element idx
+    int max_idx = std::max_element(contours_list_red_.begin(), contours_list_red_.end()) - contours_list_red_.begin();
+    int best_idx = contours_list_red_idx[max_idx];
 
     // Show the images with the best set of parameters
-    for (size_t l=0; l<parameter_names_.size(); l++)
-    {
-      // Change the parameter
-      tracker.setParameter(parameter_names_[l], parameters_table_[min_idx][l]);
-    }
+    for (size_t i=0; i<parameter_names_.size(); i++)
+      tracker.setParameter(parameter_names_[i], parameters_table_[best_idx][i]);
     tracker.valveDetection(l_image_, true);
 
     // Show the best value
     ROS_INFO("[NodeAutotuning:] **********************************************");
-    ROS_INFO_STREAM("[NodeAutotuning:] Mimimum error achieved is: " << min_val);
+    ROS_INFO_STREAM("[NodeAutotuning:] Mimimum error achieved is: " << error_list_[best_idx]);
+    ROS_INFO_STREAM("[NodeAutotuning:] With a countour size of: " << contours_size_list_[best_idx]);
     ROS_INFO("[NodeAutotuning:] Using the parameter set:");
-    for (size_t k=0; k<parameter_names_.size(); k++)
+    for (size_t i=0; i<parameter_names_.size(); i++)
     {
-      ROS_INFO_STREAM("[NodeAutotuning:]   - " << parameter_names_[k] << ": " << 
-                      parameters_table_[min_idx][k]);
+      ROS_INFO_STREAM("[NodeAutotuning:]   - " << parameter_names_[i] << ": " << 
+                      parameters_table_[best_idx][i]);
     }
+    ROS_INFO("[NodeAutotuning:] The result for this parameter set is displayed in the GUI.");
+
+    if(save_tuned_parameters_)
+    {
+      for (size_t i=0; i<parameter_names_.size(); i++)
+      {
+        nh_.setParam("/valve_tracker/" + parameter_names_[i], parameters_table_[best_idx][i]);
+      }
+      ROS_INFO("[NodeAutotuning:] The best parameter set has been saved into parameter server.");
+    }
+
     ROS_INFO("[NodeAutotuning:] **********************************************");
   }
 
@@ -279,7 +311,10 @@ private:
   std::vector<cv::Point3d> valve_model_points_;     //!> 3D synthetic valve points.
   image_geometry::StereoCameraModel stereo_model_;  //!> Camera model to compute the 3d world points.
   std::vector<double> error_list_;                  //!> List of errors for every combination.
+  std::vector<double> contours_size_list_;          //!> List of contours size for every combination.
   int epipolar_width_threshold_;                    //!> For epipolar threshold filtering.
+  double maximum_allowed_error_;                    //!> Maximum allowed error.
+  bool save_tuned_parameters_;                      //!> To save the tuned parameters into the parameters server.
 
   // Topic properties
   image_transport::SubscriberFilter left_sub_, right_sub_;
