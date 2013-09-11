@@ -78,7 +78,7 @@ namespace valve_tracker
       * \param input vector of real valve points.
       */
     static tf::Transform affine3Dtransformation(std::vector<cv::Point3d> pointcloud_1, 
-                                                                                            std::vector<cv::Point3d> pointcloud_2)
+                                                std::vector<cv::Point3d> pointcloud_2)
     {
       // Compute centroids
       Eigen::Vector3f centroid_mdl(0.0, 0.0, 0.0);

@@ -4,6 +4,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <tf/transform_broadcaster.h>
 #include <Eigen/Eigen>
+#include <numeric>
 #include "opencv2/core/core.hpp"
 #include <message_filters/subscriber.h>
 #include <message_filters/time_synchronizer.h>
@@ -208,22 +209,21 @@ public:
       tracker.showParameterSet();
 
       // Detect the valve
-      int l_contours_size = 0;
-      int r_contours_size = 0;
+      std::vector<int> l_contours_size, r_contours_size;   
+      std::vector<cv::Point2d> l_points_2d = tracker.valveDetection(l_image_, true, l_contours_size);
+      std::vector<cv::Point2d> r_points_2d = tracker.valveDetection(r_image_, false, r_contours_size);
       int mean_contours = 0;
-      std::vector< std::vector<cv::Point2d> > points_2d;      
-      points_2d.push_back(tracker.valveDetection(l_image_, true, l_contours_size));
-      points_2d.push_back(tracker.valveDetection(r_image_, false, r_contours_size));
-      mean_contours = abs((l_contours_size + r_contours_size)/2);
+      mean_contours = abs((std::accumulate(l_contours_size.begin(), l_contours_size.end(), 0) + 
+                           std::accumulate(r_contours_size.begin(), r_contours_size.end(), 0))/2);
       contours_size_list_.push_back(mean_contours);
 
       // Valve is defined by 3 points
       double error = std::numeric_limits<double>::max();
-      if (points_2d[0].size() == 3 || points_2d[1].size() == 3)
+      if (l_points_2d.size() == 3 || r_points_2d.size() == 3)
       {
         // Triangulate the 3D points
         std::vector<cv::Point3d> points3d;
-        points3d = tracker.triangulatePoints(points_2d);
+        points3d = tracker.triangulatePoints(l_points_2d, r_points_2d, l_contours_size, r_contours_size);
         
         // Compute the 3D points of the valve
         if(points3d.size() == 3)

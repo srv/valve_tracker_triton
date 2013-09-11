@@ -34,9 +34,13 @@ public:
   std::vector<cv::Point2d> valveDetection(
     cv::Mat image, bool debug);                           //!> Valve detection
   std::vector<cv::Point2d> valveDetection(
-    cv::Mat image, bool debug, int &contours_size);       //!> Valve detection
+    cv::Mat image, bool debug, 
+    std::vector<int> &contours_size);                     //!> Valve detection
   std::vector<cv::Point3d> triangulatePoints(
-    std::vector< std::vector<cv::Point2d> > points_2d);   //!> Valve points triangulization
+    std::vector<cv::Point2d> l_points_2d, 
+    std::vector<cv::Point2d> r_points_2d,
+    std::vector<int> l_contours_size,
+    std::vector<int> r_contours_size);                    //!> Valve points triangulization
   bool estimateTransform(
     std::vector<cv::Point3d> points_3d,
     tf::Transform& output,
@@ -50,6 +54,7 @@ private:
   // Node parameters
   std::string stereo_frame_id_;
   std::string valve_frame_id_;
+  std::string connector_frame_id_;
   image_transport::Publisher image_pub_;
 
   // Tracker parameters
