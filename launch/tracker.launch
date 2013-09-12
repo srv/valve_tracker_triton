@@ -24,6 +24,6 @@
   </node>
 
   <!-- Static transform from valve to connector -->
-    <node pkg="tf" type="static_transform_publisher" name="valve_to_connector" args="0 0.39 -0.15 0 0 0.52 valve connector 100" />
+  <node pkg="tf" type="static_transform_publisher" name="valve_to_connector" args="0 0.38 -0.16 0 0 -0.52 valve_no_rot connector 100" />
   
 </launch>

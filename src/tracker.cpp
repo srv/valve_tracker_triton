@@ -201,12 +201,11 @@ void valve_tracker::Tracker::stereoImageCallback(
   }
 
   // Log
+  double roll, pitch, yaw;
   double x = camera_to_valve_.getOrigin().x();
   double y = camera_to_valve_.getOrigin().y();
   double z = camera_to_valve_.getOrigin().z();
-  double roll, pitch, yaw;
-  tf::Matrix3x3 rot = camera_to_valve_.getBasis();
-  rot.getRPY(roll, pitch, yaw);
+  camera_to_valve_.getBasis().getRPY(roll, pitch, yaw);
   ROS_INFO_STREAM("Camera to valve: [" << x << ", " << y << ", " << z << 
                   ", " << roll << ", " << pitch << ", " << yaw << "]");
 
@@ -249,6 +248,19 @@ void valve_tracker::Tracker::stereoImageCallback(
   tf_broadcaster_.sendTransform(
       tf::StampedTransform(camera_to_valve_, l_image_msg->header.stamp,
       stereo_frame_id_, valve_frame_id_));
+
+  // Publish an unrotated transform
+  double r_tmp, p_tmp, y_tmp;
+  tf::Transform camera_to_valve_no_rot;
+  camera_to_valve_no_rot.setIdentity();
+  camera_to_valve_no_rot.setOrigin(camera_to_valve_.getOrigin());
+  camera_to_valve_.getBasis().getRPY(r_tmp, p_tmp, y_tmp);
+  tf::Quaternion rot_tmp;
+  rot_tmp.setRPY(r_tmp, p_tmp, 0.0);
+  camera_to_valve_no_rot.setRotation(rot_tmp);
+  tf_broadcaster_.sendTransform(
+      tf::StampedTransform(camera_to_valve_no_rot, l_image_msg->header.stamp,
+      stereo_frame_id_, valve_frame_id_+"_no_rot"));
 }
 
 /** \brief Detect the valve into the image
