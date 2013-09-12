@@ -13,6 +13,7 @@
     <param name="min_value_threshold" value="39"/>
     <param name="min_blob_size" value="5"/>
     <param name="max_blob_size" value="200"/>
+    <param name="show_debug" value="true"/>
 
     <!-- Load model -->
     <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />
@@ -21,4 +22,8 @@
     <remap from="image" to="$(arg image)"/>
 
   </node>
+
+  <!-- Static transform from valve to connector -->
+  <node pkg="tf" type="static_transform_publisher" name="valve_to_connector" args="1 0 0 0 0 0 valve_no_rot connector 100" />
+  
 </launch>

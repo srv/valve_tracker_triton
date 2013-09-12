@@ -54,7 +54,7 @@ private:
   // Node parameters
   std::string stereo_frame_id_;
   std::string valve_frame_id_;
-  std::string connector_frame_id_;
+  std::string valve_no_rot_frame_id_;
   image_transport::Publisher image_pub_;
 
   // Tracker parameters

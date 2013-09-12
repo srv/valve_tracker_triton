@@ -28,7 +28,7 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
   ros::NodeHandle nhp("~");
   nhp.param("stereo_frame_id", stereo_frame_id_, std::string("/stereo_down"));
   nhp.param("valve_frame_id", valve_frame_id_, std::string("/valve"));
-  nhp.param("connector_frame_id", connector_frame_id_, std::string("/connector"));
+  nhp.param("valve_no_rot_frame_id", valve_no_rot_frame_id_, std::string("/valve_no_rot"));
   nhp.param("closing_element_size", closing_element_size_, 0);
   nhp.param("opening_element_size", opening_element_size_, 1);
   nhp.param("binary_threshold", binary_threshold_, 80);
@@ -46,6 +46,7 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
   ROS_INFO_STREAM("[Tracker:] Valve Tracker Settings:" << std::endl <<
                   "  stereo_frame_id            = " << stereo_frame_id_ << std::endl <<
                   "  valve_frame_id             = " << valve_frame_id_ << std::endl <<
+                  "  valve_no_rot_frame_id      = " << valve_no_rot_frame_id_ << std::endl <<
                   "  closing_element_size       = " << closing_element_size_ << std::endl <<
                   "  opening_element_size       = " << opening_element_size_ << std::endl <<
                   "  binary_threshold           = " << binary_threshold_ << std::endl <<
@@ -203,20 +204,14 @@ void valve_tracker::Tracker::stereoImageCallback(
       tf::StampedTransform(camera_to_valve_, l_image_msg->header.stamp,
       stereo_frame_id_, valve_frame_id_));
 
-  // Publish the transform from valve to connector
-  tf::Vector3 trans(0.0, 0.16, 0.105);
-  tf::Quaternion rot;
-  rot.setRPY(-0.5236, 0.0, 0.0);
-  tf::Transform valve_to_connector(rot, trans);
-  tf::Transform tmp;
-  tmp.setIdentity();
-  tf::Vector3 trans_tmp(0.0, 0.29, -0.27);
-  tmp.setOrigin(trans_tmp);
-  valve_to_connector = valve_to_connector * tmp;
+  // Publish the transform from camera to valve without rotation
+  tf::Transform camera_to_valve_no_rot;
+  camera_to_valve_no_rot.setIdentity();
+  camera_to_valve_no_rot.setOrigin(camera_to_valve_.getOrigin());
 
   tf_broadcaster_.sendTransform(
-      tf::StampedTransform(valve_to_connector, l_image_msg->header.stamp,
-      valve_frame_id_, connector_frame_id_));
+      tf::StampedTransform(camera_to_valve_no_rot, l_image_msg->header.stamp,
+      stereo_frame_id_, valve_no_rot_frame_id_));
 }
 
 /** \brief Detect the valve into the image
