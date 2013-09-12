@@ -4,6 +4,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <tf/transform_broadcaster.h>
 #include <Eigen/Eigen>
+#include <numeric>
 #include "opencv2/core/core.hpp"
 
 /** \brief Tracker constructor
@@ -28,7 +29,6 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
   ros::NodeHandle nhp("~");
   nhp.param("stereo_frame_id", stereo_frame_id_, std::string("/stereo_down"));
   nhp.param("valve_frame_id", valve_frame_id_, std::string("/valve"));
-  nhp.param("valve_no_rot_frame_id", valve_no_rot_frame_id_, std::string("/valve_no_rot"));
   nhp.param("closing_element_size", closing_element_size_, 0);
   nhp.param("opening_element_size", opening_element_size_, 1);
   nhp.param("binary_threshold", binary_threshold_, 80);
@@ -42,11 +42,11 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
       valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
   nhp.param("show_debug", show_debug_, false);
   nhp.param("warning_on", warning_on_, false);
+  nhp.param("tf_filter_size", tf_filter_size_, 0);  
 
   ROS_INFO_STREAM("[Tracker:] Valve Tracker Settings:" << std::endl <<
                   "  stereo_frame_id            = " << stereo_frame_id_ << std::endl <<
                   "  valve_frame_id             = " << valve_frame_id_ << std::endl <<
-                  "  valve_no_rot_frame_id      = " << valve_no_rot_frame_id_ << std::endl <<
                   "  closing_element_size       = " << closing_element_size_ << std::endl <<
                   "  opening_element_size       = " << opening_element_size_ << std::endl <<
                   "  binary_threshold           = " << binary_threshold_ << std::endl <<
@@ -56,6 +56,7 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
                   "  epipolar_width_threshold   = " << epipolar_width_threshold_ << std::endl <<
                   "  mean_filter_size           = " << mean_filter_size_ << std::endl <<
                   "  max_tf_error               = " << max_tf_error_ << std::endl <<
+                  "  tf_filter_size             = " << tf_filter_size_ << std::endl <<
                   "  trained_model_path         = " << trained_model_path_ << std::endl);
 
   // Load the model
@@ -199,19 +200,55 @@ void valve_tracker::Tracker::stereoImageCallback(
     image_pub_.publish(cv_ptr->toImageMsg());
   }
 
+  // Log
+  double x = camera_to_valve_.getOrigin().x();
+  double y = camera_to_valve_.getOrigin().y();
+  double z = camera_to_valve_.getOrigin().z();
+  double roll, pitch, yaw;
+  tf::Matrix3x3 rot = camera_to_valve_.getBasis();
+  rot.getRPY(roll, pitch, yaw);
+  ROS_INFO_STREAM("Camera to valve: [" << x << ", " << y << ", " << z << 
+                  ", " << roll << ", " << pitch << ", " << yaw << "]");
+
+  // Filter tf
+  if (tf_filter_size_ > 0)
+  {
+    // Push back to the filter
+    tf_x_.push_back(x);
+    tf_y_.push_back(y);
+    tf_z_.push_back(z);
+    tf_roll_.push_back(roll);
+    tf_pitch_.push_back(pitch);
+    tf_yaw_.push_back(yaw);
+
+    if (tf_x_.size() > (unsigned int)tf_filter_size_)
+    {
+      tf_x_.erase(tf_x_.begin(), tf_x_.begin() + 1);
+      tf_y_.erase(tf_y_.begin(), tf_y_.begin() + 1);
+      tf_z_.erase(tf_z_.begin(), tf_z_.begin() + 1);
+      tf_roll_.erase(tf_roll_.begin(), tf_roll_.begin() + 1);
+      tf_pitch_.erase(tf_pitch_.begin(), tf_pitch_.begin() + 1);
+      tf_yaw_.erase(tf_yaw_.begin(), tf_yaw_.begin() + 1);
+    }
+
+    double x_mean = std::accumulate(tf_x_.begin(), tf_x_.end(), 0.0) / tf_x_.size();
+    double y_mean = std::accumulate(tf_y_.begin(), tf_y_.end(), 0.0) / tf_y_.size();
+    double z_mean = std::accumulate(tf_z_.begin(), tf_z_.end(), 0.0) / tf_z_.size();
+    double roll_mean = std::accumulate(tf_roll_.begin(), tf_roll_.end(), 0.0) / tf_roll_.size();
+    double pitch_mean = std::accumulate(tf_pitch_.begin(), tf_pitch_.end(), 0.0) / tf_pitch_.size();
+    double yaw_mean = std::accumulate(tf_yaw_.begin(), tf_yaw_.end(), 0.0) / tf_yaw_.size();
+
+    tf::Quaternion rotation;
+    rotation.setRPY(roll_mean, pitch_mean, yaw_mean);
+    tf::Vector3 trans(x_mean, y_mean, z_mean);
+    camera_to_valve_.setRotation(rotation);
+    camera_to_valve_.setOrigin(trans);
+  }
+
   // Publish last computed transform from camera to valve
   tf_broadcaster_.sendTransform(
       tf::StampedTransform(camera_to_valve_, l_image_msg->header.stamp,
       stereo_frame_id_, valve_frame_id_));
-
-  // Publish the transform from camera to valve without rotation
-  tf::Transform camera_to_valve_no_rot;
-  camera_to_valve_no_rot.setIdentity();
-  camera_to_valve_no_rot.setOrigin(camera_to_valve_.getOrigin());
-
-  tf_broadcaster_.sendTransform(
-      tf::StampedTransform(camera_to_valve_no_rot, l_image_msg->header.stamp,
-      stereo_frame_id_, valve_no_rot_frame_id_));
 }
 
 /** \brief Detect the valve into the image
@@ -315,7 +352,7 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
       std::vector< std::vector<cv::Point> > contours_tmp(contours.begin(), contours.begin() + 3);
       contours_filtered = contours_tmp;
 
-      // Sort from left to right and from top to bottom
+      // Compute the blob centroids
       for (size_t i = 0; i < contours_filtered.size(); i++)
       {
         // Calculate contours size

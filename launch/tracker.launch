@@ -14,8 +14,8 @@
     <param name="min_blob_size" value="5"/>
     <param name="max_blob_size" value="200"/>
     <param name="show_debug" value="true"/>
+    <param name="tf_filter_size" value="3"/>  
 
-    <!-- Load model -->
     <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />
 
     <remap from="stereo" to="$(arg stereo)"/>
@@ -24,6 +24,6 @@
   </node>
 
   <!-- Static transform from valve to connector -->
-  <node pkg="tf" type="static_transform_publisher" name="valve_to_connector" args="1 0 0 0 0 0 valve_no_rot connector 100" />
+    <node pkg="tf" type="static_transform_publisher" name="valve_to_connector" args="0 0.39 -0.15 0 0 0.52 valve connector 100" />
   
 </launch>
