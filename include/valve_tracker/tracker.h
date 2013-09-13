@@ -66,12 +66,15 @@ private:
   int mean_filter_size_;
   int min_value_threshold_;
   double max_tf_error_;
+  double max_rot_diff_;
+  double max_trans_diff_;
   std::string trained_model_path_;
   std::string tuning_gui_name_;
   std::vector<cv::Point3d> valve_model_points_;
   cv::MatND trained_model_;
   bool show_debug_;
   bool warning_on_;
+  bool first_iter_;
 
   // TF filter
   int tf_filter_size_;
