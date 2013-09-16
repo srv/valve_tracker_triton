@@ -190,7 +190,7 @@ void valve_tracker::Tracker::stereoImageCallback(
   {
     // Triangulate the 3D points
     std::vector<cv::Point3d> points3d;
-    points3d = triangulatePoints(l_points_2d, r_points_2d, l_contours_size, l_contours_size);
+    points3d = triangulatePoints(l_points_2d, r_points_2d, l_contours_size, r_contours_size);
 
     // Proceed depending on the number of object points detected
     if(points3d.size() == 2)
@@ -239,11 +239,10 @@ void valve_tracker::Tracker::stereoImageCallback(
       first_iter_ = false;   
     }
   }
-  else
+  else if (warning_on_)
   {
-    if (warning_on_)
-      ROS_WARN_STREAM("[Tracker:] Incorrect number of valve points found (" << 
-                      l_points_2d.size() << " points) 2-3 needed.");
+    ROS_WARN_STREAM("[Tracker:] Incorrect number of valve points found (" << 
+                    l_points_2d.size() << " points) 2-3 needed.");
   }
 
   // Publish processed image
@@ -353,7 +352,7 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
   cv::Mat binary;
   cv::threshold(backprojection, binary, binary_threshold_, 255, CV_THRESH_BINARY);
 
-  // morphologicla operations
+  // morphological operations
   cv::Mat binary_morphed = binary.clone();
   if (opening_element_size_ > 0)
   {
@@ -368,7 +367,7 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
     cv::morphologyEx(binary_morphed, binary_morphed, cv::MORPH_CLOSE, element);
   }  
 
-  // create mask for ivalid values
+  // create mask for invalid values
   std::vector<cv::Mat> hsv_channels;
   cv::split(hsv_image, hsv_channels);
   cv::Mat value = hsv_channels[2];
@@ -386,11 +385,11 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
 
   if (contours.size() < 2)
   {
-    ROS_DEBUG_STREAM("[Tracker:] Not enought points detected: " << contours.size() << " (3 needed).");
+    ROS_DEBUG_STREAM("[Tracker:] Not enough points detected: " << contours.size() << " (3 needed).");
   }
   else
   {
-    // 3 or more blobs detected. Delete too big and too small blobs
+    // 2 or more blobs detected. Delete too big and too small blobs
     std::vector< std::vector<cv::Point> >::iterator iter = contours.begin();
     while (iter != contours.end())
     {
@@ -405,7 +404,7 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
       }
     }
 
-    // Check that we keep having at least 3 contours
+    // Check that we keep having at least 2 contours
     if (contours.size() < 2)
     {
       ROS_DEBUG("[Tracker:] Blob filtering has removed too many blobs!");
@@ -419,6 +418,7 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
       int max_blobs_num = 3;
       if (contours.size() == 2)
         max_blobs_num = 2;
+
       std::vector< std::vector<cv::Point> > contours_tmp(contours.begin(), contours.begin() + max_blobs_num);
       contours_filtered = contours_tmp;
 
@@ -535,8 +535,8 @@ std::vector<cv::Point3d> valve_tracker::Tracker::triangulatePoints(
       // 2) X distance
       x_dist.push_back(abs( (pl.x-l_x_min) - (pr.x-r_x_min) ));
 
-      // 3) Blob dsize difference
-      blobs_size_diff.push_back(abs(l_contours_size[i] - l_contours_size[j]));
+      // 3) Blob size difference
+      blobs_size_diff.push_back(abs(l_contours_size[i] - r_contours_size[j]));
     }
 
     // Normalize vectors
@@ -648,7 +648,7 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
   // Target point cloud
   std::vector<cv::Point3d> tgt;
 
-  // Get target root point
+  //TODO: Get target root point. Partial solution with Y axis
   std::vector<double> points3d_y;
   points3d_y.push_back(points_3d[0].y);
   points3d_y.push_back(points_3d[1].y);
@@ -706,7 +706,7 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
   tgt.push_back(cv::Point3d( points_3d[v[idx_no_track]].x, points_3d[v[idx_no_track]].y, points_3d[v[idx_no_track]].z ));
   tgt.push_back(cv::Point3d( points_3d[idx_root].x, points_3d[idx_root].y, points_3d[idx_root].z ));
 
-  // Set the trakcer
+  // Set the tracker
   valve_symmetric_point_ = tgt[1];
 
   return tgt;
