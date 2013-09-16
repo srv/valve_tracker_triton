@@ -172,6 +172,19 @@ void valve_tracker::Tracker::stereoImageCallback(
   std::vector<cv::Point2d> l_points_2d = valveDetection(l_cv_image_ptr->image, show_debug_, l_contours_size);
   std::vector<cv::Point2d> r_points_2d = valveDetection(r_cv_image_ptr->image, false, r_contours_size);
 
+  // Handle the vertical valve case
+  if (l_points_2d.size() == 2 && r_points_2d.size() == 3)
+  {
+    r_points_2d.erase(r_points_2d.begin() + r_points_2d.size() - 1);
+    r_contours_size.erase(r_contours_size.begin() + r_contours_size.size() - 1);
+  }
+  else if (l_points_2d.size() == 3 && r_points_2d.size() == 2)
+  {
+    l_points_2d.erase(l_points_2d.begin() + l_points_2d.size() - 1);
+    l_contours_size.erase(l_contours_size.begin() + l_contours_size.size() - 1);
+  }
+
+  // Triangulate points
   if ((l_points_2d.size() == 2 && r_points_2d.size() == 2) ||
       (l_points_2d.size() == 3 && r_points_2d.size() == 3))
   {
@@ -222,7 +235,8 @@ void valve_tracker::Tracker::stereoImageCallback(
                         "transformation are out of bounds: Trans: " << trans_diff << "m. Rot (RPY): " <<
                         fabs(prev_roll - curr_roll) << ", " << fabs(prev_pitch - curr_pitch) <<
                         ", " << fabs(prev_yaw - curr_yaw));
-      }      
+      }
+      first_iter_ = false;   
     }
   }
   else
@@ -285,7 +299,6 @@ void valve_tracker::Tracker::stereoImageCallback(
     camera_to_valve_.setOrigin(trans);
   }
 
-
   // Publish last computed transform from camera to valve
   tf_broadcaster_.sendTransform(
       tf::StampedTransform(camera_to_valve_, l_image_msg->header.stamp,
@@ -303,8 +316,6 @@ void valve_tracker::Tracker::stereoImageCallback(
   tf_broadcaster_.sendTransform(
       tf::StampedTransform(camera_to_valve_no_rot, l_image_msg->header.stamp,
       stereo_frame_id_, valve_frame_id_+"_no_rot"));
-
-  first_iter_ = false;
 }
 
 /** \brief Detect the valve into the image
@@ -373,7 +384,7 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
   cv::findContours(contour_output, contours, CV_RETR_LIST, CV_CHAIN_APPROX_NONE);
   std::vector< std::vector<cv::Point> > contours_filtered;
 
-  if (contours.size() < 3)
+  if (contours.size() < 2)
   {
     ROS_DEBUG_STREAM("[Tracker:] Not enought points detected: " << contours.size() << " (3 needed).");
   }
@@ -395,7 +406,7 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
     }
 
     // Check that we keep having at least 3 contours
-    if (contours.size() < 3)
+    if (contours.size() < 2)
     {
       ROS_DEBUG("[Tracker:] Blob filtering has removed too many blobs!");
     }
@@ -404,8 +415,11 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
       // Sort the result by size
       std::sort(contours.begin(), contours.end(), valve_tracker::Utils::sort_vectors_by_size);
 
-      // Get the 3 biggest blobs
-      std::vector< std::vector<cv::Point> > contours_tmp(contours.begin(), contours.begin() + 3);
+      // Get the 2-3 biggest blobs
+      int max_blobs_num = 3;
+      if (contours.size() == 2)
+        max_blobs_num = 2;
+      std::vector< std::vector<cv::Point> > contours_tmp(contours.begin(), contours.begin() + max_blobs_num);
       contours_filtered = contours_tmp;
 
       // Compute the blob centroids
@@ -452,7 +466,7 @@ std::vector<cv::Point2d> valve_tracker::Tracker::valveDetection(cv::Mat image, b
 
     // Create the window and the trackbars
     cv::namedWindow(tuning_gui_name_, 0);
-    cv::setWindowProperty(tuning_gui_name_, CV_WND_PROP_FULLSCREEN, CV_WINDOW_FULLSCREEN);
+    cv::setWindowProperty(tuning_gui_name_, CV_WND_PROP_ASPECTRATIO, CV_WINDOW_KEEPRATIO);
     cv::createTrackbar("mean_filter_size", tuning_gui_name_,  &mean_filter_size_, 255);
     cv::createTrackbar("binary_threshold", tuning_gui_name_,  &binary_threshold_, 255);
     cv::createTrackbar("closing_element_size", tuning_gui_name_,  &closing_element_size_, 255);
@@ -547,10 +561,24 @@ std::vector<cv::Point3d> valve_tracker::Tracker::triangulatePoints(
     matchings.push_back(best_matching);
   }
 
-  // Check correspondences
-  if (std::find(matchings.begin(), matchings.end(), (int)0) != matchings.end() && 
+  // Check if correspondences are solved
+  bool correspondences_solved = false;
+  if (l_points_2d.size() == 2)
+  {
+    if (std::find(matchings.begin(), matchings.end(), (int)0) != matchings.end() && 
+      std::find(matchings.begin(), matchings.end(), (int)1) != matchings.end())
+      correspondences_solved = true;
+  }
+  else
+  {
+    if (std::find(matchings.begin(), matchings.end(), (int)0) != matchings.end() && 
       std::find(matchings.begin(), matchings.end(), (int)1) != matchings.end() && 
       std::find(matchings.begin(), matchings.end(), (int)2) != matchings.end())
+      correspondences_solved = true;
+  }
+
+  // Check correspondences
+  if (correspondences_solved)
   {
     // Compute the 3d points
     for (size_t h = 0; h < l_points_2d.size(); h++)
@@ -584,13 +612,7 @@ bool valve_tracker::Tracker::estimateTransform(
 
   // Sanity check
   if (valve_3d_points.size() != 3)
-  {
-    if (warning_on_)
-      ROS_WARN_STREAM("[Tracker:] Impossible to estimate the transformation " << 
-                      "between camera and valve, wrong 3d correspondences size: " <<
-                      valve_3d_points.size());
     return false;
-  }
 
   // Match the real valve points with the model
   std::vector<cv::Point3d> valve_target_points = matchTgtMdlPoints(valve_3d_points, false);

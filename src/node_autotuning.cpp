@@ -92,7 +92,7 @@ public:
 
     // Some other parameters
     nhp.param("epipolar_width_threshold", epipolar_width_threshold_, 3);
-    nhp.param("maximum_allowed_error", maximum_allowed_error_, 0.001); 
+    nhp.param("maximum_allowed_error", maximum_allowed_error_, 0.1); 
     nhp.param("save_tuned_parameters", save_tuned_parameters_, true);
 
     // Create the table of all posible combinations
@@ -104,6 +104,7 @@ public:
     // Window to select the image for tuning
     selector_gui_name_ = "Select Image for Tuning";
     cv::namedWindow(selector_gui_name_, 0);
+    cv::setWindowProperty(selector_gui_name_, CV_WND_PROP_ASPECTRATIO, CV_WINDOW_KEEPRATIO);
     cv::setMouseCallback(selector_gui_name_, &valve_tracker::NodeAutotuning::staticMouseCallback, this);
 
     // Initialize autotuning
@@ -212,30 +213,57 @@ public:
       std::vector<int> l_contours_size, r_contours_size;   
       std::vector<cv::Point2d> l_points_2d = tracker.valveDetection(l_image_, true, l_contours_size);
       std::vector<cv::Point2d> r_points_2d = tracker.valveDetection(r_image_, false, r_contours_size);
+
+      // Handle the vertical valve case
+      if (l_points_2d.size() == 2 && r_points_2d.size() == 3)
+      {
+        r_points_2d.erase(r_points_2d.begin() + r_points_2d.size() - 1);
+        r_contours_size.erase(r_contours_size.begin() + r_contours_size.size() - 1);
+      }
+      else if (l_points_2d.size() == 3 && r_points_2d.size() == 2)
+      {
+        l_points_2d.erase(l_points_2d.begin() + l_points_2d.size() - 1);
+        l_contours_size.erase(l_contours_size.begin() + l_contours_size.size() - 1);
+      }
+
+      // Compute total contours size
       int mean_contours = 0;
       mean_contours = abs((std::accumulate(l_contours_size.begin(), l_contours_size.end(), 0) + 
                            std::accumulate(r_contours_size.begin(), r_contours_size.end(), 0))/2);
       contours_size_list_.push_back(mean_contours);
 
-      // Valve is defined by 3 points
-      double error = std::numeric_limits<double>::max();
-      if (l_points_2d.size() == 3 || r_points_2d.size() == 3)
+      if ((l_points_2d.size() == 2 && r_points_2d.size() == 2) ||
+      (l_points_2d.size() == 3 && r_points_2d.size() == 3))
       {
         // Triangulate the 3D points
         std::vector<cv::Point3d> points3d;
-        points3d = tracker.triangulatePoints(l_points_2d, r_points_2d, l_contours_size, r_contours_size);
-        
-        // Compute the 3D points of the valve
-        if(points3d.size() == 3)
+        points3d = tracker.triangulatePoints(l_points_2d, r_points_2d, l_contours_size, l_contours_size);
+
+        // Proceed depending on the number of object points detected
+        if(points3d.size() == 2)
         {
-          // Compute the transformation from camera to valve
-          tf::Transform camera_to_valve_tmp;
-          tracker.estimateTransform(points3d, camera_to_valve_tmp, error);
+          // Get the non-basis point
+          std::vector<double> tmp;
+          tmp.push_back(points3d[0].y);
+          tmp.push_back(points3d[1].y);
+          int max_y_idx = std::max_element(tmp.begin(), tmp.end())-tmp.begin();
+
+          // Valve is rotated 90º. Add an additional point
+          cv::Point3d hidden_point(points3d[max_y_idx].x, points3d[max_y_idx].y+0.08, points3d[max_y_idx].z);
+          points3d.push_back(hidden_point);
         }
-      }
-      ROS_INFO_STREAM("[NodeAutotuning:] Blob contours size: " << mean_contours);
-      ROS_INFO_STREAM("[NodeAutotuning:] Transformation error: " << error);
-      error_list_.push_back(error);
+
+        // Initialize errors
+        double error = std::numeric_limits<double>::max();
+        
+        // Compute the transformation from camera to valve
+        tf::Transform camera_to_valve_tmp;
+        tracker.estimateTransform(points3d, camera_to_valve_tmp, error);
+
+        ROS_INFO_STREAM("[NodeAutotuning:] Blob contours size: " << mean_contours);
+        ROS_INFO_STREAM("[NodeAutotuning:] Transformation error: " << error);
+        error_list_.push_back(error);
+      }      
     }
 
     // Give me all the indices with minimum errors
