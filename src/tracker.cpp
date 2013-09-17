@@ -648,7 +648,8 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
   // Target point cloud
   std::vector<cv::Point3d> tgt;
 
-  //TODO: Get target root point. Partial solution with Y axis
+  // The root point (where the valve touches the panel), can be located
+  // as the point with minimum Y coordinate.
   std::vector<double> points3d_y;
   points3d_y.push_back(points_3d[0].y);
   points3d_y.push_back(points_3d[1].y);
