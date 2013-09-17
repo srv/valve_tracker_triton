@@ -74,7 +74,6 @@ private:
   cv::MatND trained_model_;
   bool show_debug_;
   bool warning_on_;
-  bool first_iter_;
 
   // TF filter
   int tf_filter_size_;

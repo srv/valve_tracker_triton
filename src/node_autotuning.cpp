@@ -23,7 +23,7 @@ public:
   /** \brief Autotuning constructor
     * \param transport
     */
-  NodeAutotuning(ros::NodeHandle nh, ros::NodeHandle nhp) : nh_(), nh_priv_("~")
+  NodeAutotuning(ros::NodeHandle nh, ros::NodeHandle nhp) : nh_(nh), nh_priv_(nhp)
   {
     ROS_INFO_STREAM("[NodeAutotuning:] Instantiating the Autotuning node...");
 
@@ -214,18 +214,6 @@ public:
       std::vector<cv::Point2d> l_points_2d = tracker.valveDetection(l_image_, true, l_contours_size);
       std::vector<cv::Point2d> r_points_2d = tracker.valveDetection(r_image_, false, r_contours_size);
 
-      // Handle the vertical valve case
-      if (l_points_2d.size() == 2 && r_points_2d.size() == 3)
-      {
-        r_points_2d.erase(r_points_2d.begin() + r_points_2d.size() - 1);
-        r_contours_size.erase(r_contours_size.begin() + r_contours_size.size() - 1);
-      }
-      else if (l_points_2d.size() == 3 && r_points_2d.size() == 2)
-      {
-        l_points_2d.erase(l_points_2d.begin() + l_points_2d.size() - 1);
-        l_contours_size.erase(l_contours_size.begin() + l_contours_size.size() - 1);
-      }
-
       // Compute total contours size
       int mean_contours = 0;
       mean_contours = abs((std::accumulate(l_contours_size.begin(), l_contours_size.end(), 0) + 
@@ -233,11 +221,11 @@ public:
       contours_size_list_.push_back(mean_contours);
 
       if ((l_points_2d.size() == 2 && r_points_2d.size() == 2) ||
-      (l_points_2d.size() == 3 && r_points_2d.size() == 3))
+         (l_points_2d.size() == 3 && r_points_2d.size() == 3))
       {
         // Triangulate the 3D points
         std::vector<cv::Point3d> points3d;
-        points3d = tracker.triangulatePoints(l_points_2d, r_points_2d, l_contours_size, l_contours_size);
+        points3d = tracker.triangulatePoints(l_points_2d, r_points_2d, l_contours_size, r_contours_size);
 
         // Proceed depending on the number of object points detected
         if(points3d.size() == 2)

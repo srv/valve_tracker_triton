@@ -95,8 +95,6 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
 
   // Set the gui names
   tuning_gui_name_ = "Valve Tracker Tuning";
-
-  first_iter_ = true;
 }
 
 /** \brief Show the current parameter set for console.
@@ -164,7 +162,7 @@ void valve_tracker::Tracker::stereoImageCallback(
     return;
   }
 
-  //MMC
+  // For debuging
   processed_ = l_cv_image_ptr->image;
 
   // Get the camera model
@@ -175,77 +173,76 @@ void valve_tracker::Tracker::stereoImageCallback(
   std::vector<cv::Point2d> l_points_2d = valveDetection(l_cv_image_ptr->image, show_debug_, l_contours_size);
   std::vector<cv::Point2d> r_points_2d = valveDetection(r_cv_image_ptr->image, false, r_contours_size);
 
-  // Handle the vertical valve case
-  if (l_points_2d.size() == 2 && r_points_2d.size() == 3)
-  {
-    r_points_2d.erase(r_points_2d.begin() + r_points_2d.size() - 1);
-    r_contours_size.erase(r_contours_size.begin() + r_contours_size.size() - 1);
-  }
-  else if (l_points_2d.size() == 3 && r_points_2d.size() == 2)
-  {
-    l_points_2d.erase(l_points_2d.begin() + l_points_2d.size() - 1);
-    l_contours_size.erase(l_contours_size.begin() + l_contours_size.size() - 1);
-  }
+  // Triangulate the 3D points
+  std::vector<cv::Point3d> points3d;
+  points3d = triangulatePoints(l_points_2d, r_points_2d, l_contours_size, r_contours_size);
 
-  // Triangulate points
-  if ((l_points_2d.size() == 2 && r_points_2d.size() == 2) ||
-      (l_points_2d.size() == 3 && r_points_2d.size() == 3))
+  // Proceed depending on the number of object points detected
+  if(points3d.size() == 2)
   {
-    // Triangulate the 3D points
-    std::vector<cv::Point3d> points3d;
-    points3d = triangulatePoints(l_points_2d, r_points_2d, l_contours_size, r_contours_size);
+    // Get the non-basis point
+    std::vector<double> tmp;
+    tmp.push_back(points3d[0].y);
+    tmp.push_back(points3d[1].y);
+    int max_y_idx = std::max_element(tmp.begin(), tmp.end())-tmp.begin();
 
-    // Proceed depending on the number of object points detected
-    if(points3d.size() == 2)
+    // Valve is rotated 90º. Add an additional point
+    cv::Point3d hidden_point(points3d[max_y_idx].x, points3d[max_y_idx].y, points3d[max_y_idx].z+0.08);
+    points3d.push_back(hidden_point);
+  }
+  
+  // All valve points are visible. Compute the transformation from camera to valve
+  tf::Transform curr_camera_to_valve;
+  double error = -1.0;
+  bool success = estimateTransform(points3d, curr_camera_to_valve, error);
+  if (success)
+  {
+    // Validate transform
+    bool valid_tf = false;
+
+    // 1) Compute transformation and angles
+    tf::Vector3 prev_trans = camera_to_valve_.getOrigin();
+    tf::Vector3 curr_trans = curr_camera_to_valve.getOrigin();
+    double trans_diff = valve_tracker::Utils::euclideanDist(prev_trans - curr_trans);
+    double prev_roll, prev_pitch, prev_yaw;
+    double curr_roll, curr_pitch, curr_yaw;
+    camera_to_valve_.getBasis().getRPY(prev_roll, prev_pitch, prev_yaw);
+    curr_camera_to_valve.getBasis().getRPY(curr_roll, curr_pitch, curr_yaw);
+
+    // 2) Check maximum roll angle
+    if ( (curr_roll*180/M_PI) < 110.0 && (curr_roll*180/M_PI) > -20.0 &&
+         (curr_yaw*180/M_PI) < 110.0 && (curr_yaw*180/M_PI) > -20.0)
     {
-      // Get the non-basis point
-      std::vector<double> tmp;
-      tmp.push_back(points3d[0].y);
-      tmp.push_back(points3d[1].y);
-      int max_y_idx = std::max_element(tmp.begin(), tmp.end())-tmp.begin();
-
-      // Valve is rotated 90º. Add an additional point
-      cv::Point3d hidden_point(points3d[max_y_idx].x, points3d[max_y_idx].y, points3d[max_y_idx].z+0.08);
-      points3d.push_back(hidden_point);
+      valid_tf = true;
     }
-    
-    // All valve points are visible. Compute the transformation from camera to valve
-    tf::Transform curr_camera_to_valve;
-    double error = -1.0;
-    bool success = estimateTransform(points3d, curr_camera_to_valve, error);
-    if (success)
+    else if (warning_on_)
     {
-      // Compute the distance between this transformation and previous
-      tf::Vector3 prev_trans = camera_to_valve_.getOrigin();
-      tf::Vector3 curr_trans = curr_camera_to_valve.getOrigin();
-      double trans_diff = valve_tracker::Utils::euclideanDist(prev_trans - curr_trans);
-      double prev_roll, prev_pitch, prev_yaw;
-      double curr_roll, curr_pitch, curr_yaw;
-      camera_to_valve_.getBasis().getRPY(prev_roll, prev_pitch, prev_yaw);
-      curr_camera_to_valve.getBasis().getRPY(curr_roll, curr_pitch, curr_yaw);
-
-      if ((trans_diff < max_trans_diff_ &&
-         fabs(prev_roll - curr_roll) < max_rot_diff_ &&
-         fabs(prev_pitch - curr_pitch) < max_rot_diff_ &&
-         fabs(prev_yaw - curr_yaw) < max_rot_diff_) ||
-         first_iter_)
-      {
-        camera_to_valve_ = curr_camera_to_valve;  
-      }
-      else
-      {
-        ROS_WARN_STREAM("[Tracker:] Rotation or translation errors between current and previous " <<
-                        "transformation are out of bounds: Trans: " << trans_diff << "m. Rot (RPY): " <<
-                        fabs(prev_roll - curr_roll) << ", " << fabs(prev_pitch - curr_pitch) <<
-                        ", " << fabs(prev_yaw - curr_yaw));
-      }
-      first_iter_ = false;   
+      ROS_WARN_STREAM("[Tracker:] Roll or Yaw rotation does not fit (-10,+110). Roll: " << 
+                      curr_roll*180/M_PI << "deg. Yaw: " << curr_yaw*180/M_PI);
     }
-  }
-  else if (warning_on_)
-  {
-    ROS_WARN_STREAM("[Tracker:] Incorrect number of valve points found (" << 
-                    l_points_2d.size() << " points) 2-3 needed.");
+
+    // 3) Check distance between this transformation and previous
+    tf::Transform ident;
+    ident.setIdentity();
+    if ((trans_diff < max_trans_diff_ &&
+       fabs(prev_roll - curr_roll) < max_rot_diff_ &&
+       fabs(prev_pitch - curr_pitch) < max_rot_diff_ &&
+       fabs(prev_yaw - curr_yaw) < max_rot_diff_ && valid_tf) ||
+       camera_to_valve_ == ident)
+    {
+      valid_tf = true;
+    }
+    else if (warning_on_)
+    {
+      ROS_WARN_STREAM("[Tracker:] Rotation or translation errors between current and previous " <<
+                      "transformation are out of bounds: Trans: " << trans_diff << "m. Rot (RPY): " <<
+                      fabs(prev_roll - curr_roll) << ", " << fabs(prev_pitch - curr_pitch) <<
+                      ", " << fabs(prev_yaw - curr_yaw));
+    }
+
+    // Update tf if valid
+    if (valid_tf)
+      camera_to_valve_ = curr_camera_to_valve;
   }
 
   // Publish processed image
@@ -257,22 +254,15 @@ void valve_tracker::Tracker::stereoImageCallback(
     image_pub_.publish(cv_ptr->toImageMsg());
   }
 
-  // Log
-  double roll, pitch, yaw;
-  double x = camera_to_valve_.getOrigin().x();
-  double y = camera_to_valve_.getOrigin().y();
-  double z = camera_to_valve_.getOrigin().z();
-  camera_to_valve_.getBasis().getRPY(roll, pitch, yaw);
-  ROS_INFO_STREAM("Camera to valve: [" << x << ", " << y << ", " << z << 
-                  ", " << roll << ", " << pitch << ", " << yaw << "]");
-
   // Filter tf
+  double x, y, z, roll, pitch, yaw;
   if (tf_filter_size_ > 0)
   {
     // Push back to the filter
-    tf_x_.push_back(x);
-    tf_y_.push_back(y);
-    tf_z_.push_back(z);
+    camera_to_valve_.getBasis().getRPY(roll, pitch, yaw);
+    tf_x_.push_back(camera_to_valve_.getOrigin().x());
+    tf_y_.push_back(camera_to_valve_.getOrigin().y());
+    tf_z_.push_back(camera_to_valve_.getOrigin().z());
     tf_roll_.push_back(roll);
     tf_pitch_.push_back(pitch);
     tf_yaw_.push_back(yaw);
@@ -301,23 +291,27 @@ void valve_tracker::Tracker::stereoImageCallback(
     camera_to_valve_.setOrigin(trans);
   }
 
+  // Log
+  camera_to_valve_.getBasis().getRPY(roll, pitch, yaw);
+  x = camera_to_valve_.getOrigin().x();
+  y = camera_to_valve_.getOrigin().y();
+  z = camera_to_valve_.getOrigin().z();
+  ROS_INFO_STREAM("Camera to valve: [" << x << ", " << y << ", " << z << 
+                  ", " << roll << ", " << pitch << ", " << yaw << "]");
+
   // Publish last computed transform from camera to valve
   tf_broadcaster_.sendTransform(
       tf::StampedTransform(camera_to_valve_, l_image_msg->header.stamp,
       stereo_frame_id_, valve_frame_id_));
 
   // Publish an unrotated transform
-  double r_tmp, p_tmp, y_tmp;
   tf::Transform camera_to_valve_no_rot;
-  camera_to_valve_no_rot.setIdentity();
-  camera_to_valve_no_rot.setOrigin(camera_to_valve_.getOrigin());
-  camera_to_valve_.getBasis().getRPY(r_tmp, p_tmp, y_tmp);
-  tf::Quaternion rot_tmp;
-  rot_tmp.setRPY(r_tmp, p_tmp, 0.0);
-  camera_to_valve_no_rot.setRotation(rot_tmp);
+  tf::Quaternion rot;
+  rot.setRPY(0.0, 0.0, -yaw);
+  camera_to_valve_no_rot.setRotation(rot);
   tf_broadcaster_.sendTransform(
       tf::StampedTransform(camera_to_valve_no_rot, l_image_msg->header.stamp,
-      stereo_frame_id_, valve_frame_id_+"_no_rot"));
+      valve_frame_id_, valve_frame_id_+"_no_rot"));
 }
 
 /** \brief Detect the valve into the image
@@ -508,99 +502,120 @@ std::vector<cv::Point3d> valve_tracker::Tracker::triangulatePoints(
   // Initialize output
   std::vector<cv::Point3d> points3d;
 
-  // De-offset x points
-  std::vector<int> l_x, r_x;
-  for (size_t n = 0; n < l_points_2d.size(); n++)
+  // Handle the vertical valve case
+  if (l_points_2d.size() == 2 && r_points_2d.size() == 3)
   {
-    l_x.push_back(l_points_2d[n].x);
-    r_x.push_back(r_points_2d[n].x);
+    r_points_2d.erase(r_points_2d.begin() + r_points_2d.size() - 1);
+    r_contours_size.erase(r_contours_size.begin() + r_contours_size.size() - 1);
   }
-  int l_x_min = *std::min_element(l_x.begin(), l_x.end());
-  int r_x_min = *std::min_element(r_x.begin(), r_x.end());
-
-  // Loop through left points
-  std::vector<int> matchings;
-  for (size_t i = 0; i < l_points_2d.size(); i++)
+  else if (l_points_2d.size() == 3 && r_points_2d.size() == 2)
   {
-    cv::Point2d pl(l_points_2d[i]);
+    l_points_2d.erase(l_points_2d.begin() + l_points_2d.size() - 1);
+    l_contours_size.erase(l_contours_size.begin() + l_contours_size.size() - 1);
+  }
 
-    // Initialize the measurements
-    std::vector<int> epipolar_dist, x_dist, blobs_size_diff;
-
-    // Loop through right points
-    for (size_t j = 0; j < r_points_2d.size(); j++)
+  // Sanity check
+  if ((l_points_2d.size() == 2 && r_points_2d.size() == 2) ||
+      (l_points_2d.size() == 3 && r_points_2d.size() == 3))
+  {
+    // De-offset x points
+    std::vector<int> l_x, r_x;
+    for (size_t n = 0; n < l_points_2d.size(); n++)
     {
-      cv::Point2d pr(r_points_2d[j]);
+      l_x.push_back(l_points_2d[n].x);
+      r_x.push_back(r_points_2d[n].x);
+    }
+    int l_x_min = *std::min_element(l_x.begin(), l_x.end());
+    int r_x_min = *std::min_element(r_x.begin(), r_x.end());
 
-      // 1) Epipolar distance
-      epipolar_dist.push_back(abs(pl.y - pr.y));
+    // Loop through left points
+    std::vector<int> matchings;
+    for (size_t i = 0; i < l_points_2d.size(); i++)
+    {
+      cv::Point2d pl(l_points_2d[i]);
 
-      // 2) X distance
-      x_dist.push_back(abs( (pl.x-l_x_min) - (pr.x-r_x_min) ));
+      // Initialize the measurements
+      std::vector<int> epipolar_dist, x_dist, blobs_size_diff;
 
-      // 3) Blob size difference
-      blobs_size_diff.push_back(abs(l_contours_size[i] - r_contours_size[j]));
+      // Loop through right points
+      for (size_t j = 0; j < r_points_2d.size(); j++)
+      {
+        cv::Point2d pr(r_points_2d[j]);
+
+        // 1) Epipolar distance
+        epipolar_dist.push_back(abs(pl.y - pr.y));
+
+        // 2) X distance
+        x_dist.push_back(abs( (pl.x-l_x_min) - (pr.x-r_x_min) ));
+
+        // 3) Blob size difference
+        blobs_size_diff.push_back(abs(l_contours_size[i] - r_contours_size[j]));
+      }
+
+      // Normalize vectors
+      int min_epipolar_dist = *std::min_element(epipolar_dist.begin(), epipolar_dist.end());
+      int max_epipolar_dist = *std::max_element(epipolar_dist.begin(), epipolar_dist.end());
+      int min_x_dist = *std::min_element(x_dist.begin(), x_dist.end());
+      int max_x_dist = *std::max_element(x_dist.begin(), x_dist.end());
+      int min_blobs_size_diff = *std::min_element(blobs_size_diff.begin() ,blobs_size_diff.end());
+      int max_blobs_size_diff = *std::max_element(blobs_size_diff.begin(), blobs_size_diff.end());
+
+      std::vector<float> normalized_errors;
+      for (size_t k = 0; k < r_points_2d.size(); k++)
+      {
+        float a = (float)(epipolar_dist[k] - min_epipolar_dist) / (float)(max_epipolar_dist - min_epipolar_dist);
+        float b = (float)(x_dist[k] - min_x_dist) / (float)(max_x_dist - min_x_dist);
+        float c = (float)(blobs_size_diff[k] - min_blobs_size_diff) / (float)(max_blobs_size_diff - min_blobs_size_diff);
+        normalized_errors.push_back(a+b+c);
+      }
+
+      // Get the best matching
+      int best_matching = std::min_element(normalized_errors.begin(), normalized_errors.end()) - normalized_errors.begin();
+      matchings.push_back(best_matching);
     }
 
-    // Normalize vectors
-    int min_epipolar_dist = *std::min_element(epipolar_dist.begin(), epipolar_dist.end());
-    int max_epipolar_dist = *std::max_element(epipolar_dist.begin(), epipolar_dist.end());
-    int min_x_dist = *std::min_element(x_dist.begin(), x_dist.end());
-    int max_x_dist = *std::max_element(x_dist.begin(), x_dist.end());
-    int min_blobs_size_diff = *std::min_element(blobs_size_diff.begin() ,blobs_size_diff.end());
-    int max_blobs_size_diff = *std::max_element(blobs_size_diff.begin(), blobs_size_diff.end());
-
-    std::vector<float> normalized_errors;
-    for (size_t k = 0; k < r_points_2d.size(); k++)
+    // Check if correspondences are solved
+    bool correspondences_solved = false;
+    if (l_points_2d.size() == 2)
     {
-      float a = (float)(epipolar_dist[k] - min_epipolar_dist) / (float)(max_epipolar_dist - min_epipolar_dist);
-      float b = (float)(x_dist[k] - min_x_dist) / (float)(max_x_dist - min_x_dist);
-      float c = (float)(blobs_size_diff[k] - min_blobs_size_diff) / (float)(max_blobs_size_diff - min_blobs_size_diff);
-      normalized_errors.push_back(a+b+c);
+      if (std::find(matchings.begin(), matchings.end(), (int)0) != matchings.end() && 
+        std::find(matchings.begin(), matchings.end(), (int)1) != matchings.end())
+        correspondences_solved = true;
+    }
+    else
+    {
+      if (std::find(matchings.begin(), matchings.end(), (int)0) != matchings.end() && 
+        std::find(matchings.begin(), matchings.end(), (int)1) != matchings.end() && 
+        std::find(matchings.begin(), matchings.end(), (int)2) != matchings.end())
+        correspondences_solved = true;
     }
 
-    // Get the best matching
-    int best_matching = std::min_element(normalized_errors.begin(), normalized_errors.end()) - normalized_errors.begin();
-    matchings.push_back(best_matching);
-  }
-
-  // Check if correspondences are solved
-  bool correspondences_solved = false;
-  if (l_points_2d.size() == 2)
-  {
-    if (std::find(matchings.begin(), matchings.end(), (int)0) != matchings.end() && 
-      std::find(matchings.begin(), matchings.end(), (int)1) != matchings.end())
-      correspondences_solved = true;
-  }
-  else
-  {
-    if (std::find(matchings.begin(), matchings.end(), (int)0) != matchings.end() && 
-      std::find(matchings.begin(), matchings.end(), (int)1) != matchings.end() && 
-      std::find(matchings.begin(), matchings.end(), (int)2) != matchings.end())
-      correspondences_solved = true;
-  }
-
-  // Check correspondences
-  if (correspondences_solved)
-  {
-    // Compute the 3d points
-    for (size_t h = 0; h < l_points_2d.size(); h++)
+    // Check correspondences
+    if (correspondences_solved)
     {
-      cv::Point3d p3d;
-      cv::Point2d pl(l_points_2d[h]);
-      cv::Point2d pr(r_points_2d[matchings[h]]);
-      stereo_model_.projectDisparityTo3d(pl, pl.x-pr.x, p3d);
-      points3d.push_back(p3d);
-      ROS_DEBUG("[Tracker:] Correspondence solved!");
-    }    
-    return points3d;
+      // Compute the 3d points
+      for (size_t h = 0; h < l_points_2d.size(); h++)
+      {
+        cv::Point3d p3d;
+        cv::Point2d pl(l_points_2d[h]);
+        cv::Point2d pr(r_points_2d[matchings[h]]);
+        stereo_model_.projectDisparityTo3d(pl, pl.x-pr.x, p3d);
+        points3d.push_back(p3d);
+        ROS_DEBUG("[Tracker:] Correspondence solved!");
+      }    
+    }
+    else if (warning_on_)
+    {
+      ROS_WARN("[Tracker:] Impossible to solve correspondences!");
+    }
   }
-  else
+  else if (warning_on_)
   {
-    // Empty
-    ROS_WARN("[Tracker:] Impossible to solve correspondences!");
-    return points3d;
+    ROS_WARN_STREAM("[Tracker:] Incorrect number of valve points found (" << 
+                    l_points_2d.size() << " points) 2-3 needed.");
   }
+
+  return points3d;
 }
 
 /** \brief Detect the valve into the image
@@ -627,6 +642,9 @@ bool valve_tracker::Tracker::estimateTransform(
   error = valve_tracker::Utils::getTfError(affineTf,
                                            valve_model_points_,
                                            valve_target_points);
+
+  double roll, pitch, yaw;
+  affineTf.getBasis().getRPY(roll, pitch, yaw);
 
   // Apply a threshold over the error
   if (error > max_tf_error_)
@@ -713,31 +731,29 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
   // Set the tracker
   valve_symmetric_point_ = tgt[1];
 
-
-  cv::namedWindow("Valve points debugger",0);
-  cv::Mat I(processed_);
-  std::vector<cv::Scalar> color;
-  color.push_back(cv::Scalar(0,255,0));
-  color.push_back(cv::Scalar(255,0,0));
-  color.push_back(cv::Scalar(0,0,255));
-  color.push_back(cv::Scalar(255,255,255));
-
-  for (size_t idx=0; idx<tgt.size(); idx++)
+  // debug purposes
+  if (show_debug_)
   {
-    cv::Point2d p;
-    stereo_model_.left().project3dToPixel(tgt[idx],p);
-    cv::circle(I, p, 15, color[idx], 2);
+    cv::namedWindow("Valve points debugger",0);
+    cv::Mat I(processed_);
+    std::vector<cv::Scalar> color;
+    color.push_back(cv::Scalar(0,255,0));
+    color.push_back(cv::Scalar(255,0,0));
+    color.push_back(cv::Scalar(0,0,255));
+    color.push_back(cv::Scalar(255,255,255));
 
-    cv::Point2d q;
-    stereo_model_.right().project3dToPixel(tgt[idx],q);
-    cv::circle(I, q, 15, color[idx], 2);
+    for (size_t idx=0; idx<tgt.size(); idx++)
+    {
+      cv::Point2d p = stereo_model_.left().project3dToPixel(tgt[idx]);
+      cv::circle(I, p, 15, color[idx], 2);
+
+      cv::Point2d q = stereo_model_.right().project3dToPixel(tgt[idx]);
+      cv::circle(I, q, 15, color[idx], 2);
+    }
+
+    cv::imshow("Valve points debugger",I);
+    cv::waitKey(5);
   }
-
-  cv::imshow("Valve points debugger",I);
-  cv::waitKey(5);
-
-
-
 
   return tgt;
 }
