@@ -164,6 +164,9 @@ void valve_tracker::Tracker::stereoImageCallback(
     return;
   }
 
+  //MMC
+  processed_ = l_cv_image_ptr->image;
+
   // Get the camera model
   stereo_model_.fromCameraInfo(l_info_msg, r_info_msg);
 
@@ -202,7 +205,7 @@ void valve_tracker::Tracker::stereoImageCallback(
       int max_y_idx = std::max_element(tmp.begin(), tmp.end())-tmp.begin();
 
       // Valve is rotated 90º. Add an additional point
-      cv::Point3d hidden_point(points3d[max_y_idx].x, points3d[max_y_idx].y+0.08, points3d[max_y_idx].z);
+      cv::Point3d hidden_point(points3d[max_y_idx].x, points3d[max_y_idx].y, points3d[max_y_idx].z+0.08);
       points3d.push_back(hidden_point);
     }
     
@@ -709,6 +712,32 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
 
   // Set the tracker
   valve_symmetric_point_ = tgt[1];
+
+
+  cv::namedWindow("Valve points debugger",0);
+  cv::Mat I(processed_);
+  std::vector<cv::Scalar> color;
+  color.push_back(cv::Scalar(0,255,0));
+  color.push_back(cv::Scalar(255,0,0));
+  color.push_back(cv::Scalar(0,0,255));
+  color.push_back(cv::Scalar(255,255,255));
+
+  for (size_t idx=0; idx<tgt.size(); idx++)
+  {
+    cv::Point2d p;
+    stereo_model_.left().project3dToPixel(tgt[idx],p);
+    cv::circle(I, p, 15, color[idx], 2);
+
+    cv::Point2d q;
+    stereo_model_.right().project3dToPixel(tgt[idx],q);
+    cv::circle(I, q, 15, color[idx], 2);
+  }
+
+  cv::imshow("Valve points debugger",I);
+  cv::waitKey(5);
+
+
+
 
   return tgt;
 }
