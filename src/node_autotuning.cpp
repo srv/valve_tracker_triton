@@ -181,14 +181,98 @@ public:
       // Close window
       cv::destroyWindow(selector_gui_name_);
 
-      // Launch the autotuning process in other thread
-      boost::thread autoTuningThread(&valve_tracker::NodeAutotuning::autotuning, this);
+      //unsubscribe from images and camera infos
+      left_sub_.unsubscribe(); 
+      right_sub_.unsubscribe();
+      left_info_sub_.unsubscribe();
+      right_info_sub_.unsubscribe();
+
+      // launch autotuning process
+      autotuning();
     }
+  }
+
+  void autotuning()
+  {
+    // allocate memory for error results
+    error_list_.resize(parameters_table_.size());
+    contours_size_list_.resize(parameters_table_.size());
+
+    // Launch the autotuning process in 4 threads
+    boost::thread autoTuningThread1(&valve_tracker::NodeAutotuning::autotuning_thread, this,1);
+    boost::thread autoTuningThread2(&valve_tracker::NodeAutotuning::autotuning_thread, this,2);
+    boost::thread autoTuningThread3(&valve_tracker::NodeAutotuning::autotuning_thread, this,3);
+    boost::thread autoTuningThread4(&valve_tracker::NodeAutotuning::autotuning_thread, this,4);
+
+    // wait for all threads to end
+    autoTuningThread1.join();
+    autoTuningThread2.join();
+    autoTuningThread3.join();
+    autoTuningThread4.join();
+
+    // Find the indexes with minimum errors
+    std::vector<int> contours_list_red_;
+    std::vector<int> contours_list_red_idx;
+
+    for (size_t i=0; i<error_list_.size(); i++)
+    {
+      if (error_list_[i] < maximum_allowed_error_)
+      {
+        contours_list_red_.push_back(contours_size_list_[i]);
+        contours_list_red_idx.push_back(i);
+      }
+    }
+
+    if (contours_list_red_.size() == 0)
+    {
+      ROS_INFO_STREAM("[NodeAutotuning:] Auto tuning could not find a set of parameters " <<
+                      "to achieve an error smaller than " << maximum_allowed_error_);
+      return;
+    }
+
+    // Find max contour element idx
+    int max_idx = std::max_element(contours_list_red_.begin(), contours_list_red_.end()) - contours_list_red_.begin();
+    int best_idx = contours_list_red_idx[max_idx];
+
+    // Show the best value
+    ROS_INFO("[NodeAutotuning:] **********************************************");
+    ROS_INFO_STREAM("[NodeAutotuning:] Mimimum error achieved is: " << error_list_[best_idx]);
+    ROS_INFO_STREAM("[NodeAutotuning:] With a countour size of: " << contours_size_list_[best_idx]);
+    ROS_INFO("[NodeAutotuning:] Using the parameter set:");
+    for (size_t i=0; i<parameter_names_.size(); i++)
+    {
+      ROS_INFO_STREAM("[NodeAutotuning:]   - " << parameter_names_[i] << ": " << 
+                      parameters_table_[best_idx][i]);
+    }
+    ROS_INFO("[NodeAutotuning:] The result for this parameter set is displayed in the GUI.");
+
+    if(save_tuned_parameters_)
+    {
+      for (size_t i=0; i<parameter_names_.size(); i++)
+      {
+        nh_.setParam("/valve_tracker/" + parameter_names_[i], parameters_table_[best_idx][i]);
+      }
+      ROS_INFO("[NodeAutotuning:] The best parameter set has been saved into parameter server.");
+    }
+
+    ROS_INFO("[NodeAutotuning:] **********************************************");
+
+    // Create new instance of valve detection
+    valve_tracker::Tracker tracker(trained_model_, 
+                                   valve_model_points_, 
+                                   stereo_model_, 
+                                   epipolar_width_threshold_);
+
+    // Show the images with the best set of parameters
+    for (size_t i=0; i<parameter_names_.size(); i++)
+      tracker.setParameter(parameter_names_[i], parameters_table_[best_idx][i]);
+    tracker.valveDetection(l_image_, true);
+    cv::waitKey(0);
   }
 
   /** \brief Autotuning process
     */
-  void autotuning()
+  void autotuning_thread(int thread_number)
   {
     // Create new instance of valve detection
     valve_tracker::Tracker tracker(trained_model_, 
@@ -196,8 +280,13 @@ public:
                                    stereo_model_, 
                                    epipolar_width_threshold_);
 
-    // Loop through the table of combinations
-    for (size_t i=0; i<parameters_table_.size(); i++)
+    // Loop through the table of combinations depending on the thread
+    unsigned int start_iter = parameters_table_.size() / 4 * (thread_number - 1);
+    unsigned int end_iter = parameters_table_.size() / 4 * thread_number;
+
+    ROS_INFO_STREAM("Instantiating valve tracker instance " << thread_number << " starting from iter " << start_iter << " to " << end_iter);
+
+    for (size_t i=start_iter; i<end_iter; i++)
     {
       // Sanity check
       ROS_ASSERT(parameters_table_[i].size() == parameter_names_.size());
@@ -211,14 +300,15 @@ public:
 
       // Detect the valve
       std::vector<int> l_contours_size, r_contours_size;   
-      std::vector<cv::Point2d> l_points_2d = tracker.valveDetection(l_image_, true, l_contours_size);
+      std::vector<cv::Point2d> l_points_2d = tracker.valveDetection(l_image_, false, l_contours_size);
       std::vector<cv::Point2d> r_points_2d = tracker.valveDetection(r_image_, false, r_contours_size);
 
       // Compute total contours size
       int mean_contours = 0;
       mean_contours = abs((std::accumulate(l_contours_size.begin(), l_contours_size.end(), 0) + 
                            std::accumulate(r_contours_size.begin(), r_contours_size.end(), 0))/2);
-      contours_size_list_.push_back(mean_contours);
+      //contours_size_list_.push_back(mean_contours);
+      contours_size_list_[i] = mean_contours;
 
       if ((l_points_2d.size() == 2 && r_points_2d.size() == 2) ||
          (l_points_2d.size() == 3 && r_points_2d.size() == 3))
@@ -250,60 +340,10 @@ public:
 
         ROS_INFO_STREAM("[NodeAutotuning:] Blob contours size: " << mean_contours);
         ROS_INFO_STREAM("[NodeAutotuning:] Transformation error: " << error);
-        error_list_.push_back(error);
+        //error_list_.push_back(error);
+        error_list_[i] = error;
       }      
     }
-
-    // Give me all the indices with minimum errors
-    std::vector<int> contours_list_red_;
-    std::vector<int> contours_list_red_idx;
-    for (size_t i=0; i<error_list_.size(); i++)
-    {
-      if (error_list_[i] < maximum_allowed_error_)
-      {
-        contours_list_red_.push_back(contours_size_list_[i]);
-        contours_list_red_idx.push_back(i);
-      }
-    }
-
-    if (contours_list_red_.size() == 0)
-    {
-      ROS_INFO_STREAM("[NodeAutotuning:] Autotuning could not find a set of parameters " <<
-                      "to achive an error smaller than " << maximum_allowed_error_);
-      return;
-    }
-
-    // Find max contour element idx
-    int max_idx = std::max_element(contours_list_red_.begin(), contours_list_red_.end()) - contours_list_red_.begin();
-    int best_idx = contours_list_red_idx[max_idx];
-
-    // Show the images with the best set of parameters
-    for (size_t i=0; i<parameter_names_.size(); i++)
-      tracker.setParameter(parameter_names_[i], parameters_table_[best_idx][i]);
-    tracker.valveDetection(l_image_, true);
-
-    // Show the best value
-    ROS_INFO("[NodeAutotuning:] **********************************************");
-    ROS_INFO_STREAM("[NodeAutotuning:] Mimimum error achieved is: " << error_list_[best_idx]);
-    ROS_INFO_STREAM("[NodeAutotuning:] With a countour size of: " << contours_size_list_[best_idx]);
-    ROS_INFO("[NodeAutotuning:] Using the parameter set:");
-    for (size_t i=0; i<parameter_names_.size(); i++)
-    {
-      ROS_INFO_STREAM("[NodeAutotuning:]   - " << parameter_names_[i] << ": " << 
-                      parameters_table_[best_idx][i]);
-    }
-    ROS_INFO("[NodeAutotuning:] The result for this parameter set is displayed in the GUI.");
-
-    if(save_tuned_parameters_)
-    {
-      for (size_t i=0; i<parameter_names_.size(); i++)
-      {
-        nh_.setParam("/valve_tracker/" + parameter_names_[i], parameters_table_[best_idx][i]);
-      }
-      ROS_INFO("[NodeAutotuning:] The best parameter set has been saved into parameter server.");
-    }
-
-    ROS_INFO("[NodeAutotuning:] **********************************************");
   }
 
 protected:
