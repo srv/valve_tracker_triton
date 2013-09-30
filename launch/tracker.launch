@@ -6,15 +6,18 @@
   <node pkg="valve_tracker_triton" type="tracker_node" name="valve_tracker" output="screen">
     <param name="stereo_frame_id" value="/stereo_forward_optical"/>
     <param name="mean_filter_size" value="5"/>
-    <param name="opening_element_size" value="10"/>
-    <param name="closing_element_size" value="14"/>
+    <param name="opening_element_size" value="3"/>
+    <param name="closing_element_size" value="3"/>
     <param name="epipolar_width_threshold" value="4"/>
-    <param name="binary_threshold" value="250"/>
-    <param name="min_value_threshold" value="39"/>
+    <param name="binary_threshold" value="71"/>
+    <param name="min_value_threshold" value="43"/>
     <param name="min_blob_size" value="5"/>
     <param name="max_blob_size" value="200"/>
     <param name="show_debug" value="true"/>
     <param name="tf_filter_size" value="3"/>  
+    <param name="warning_on" value="true"/>
+    <param name="max_rot_diff" value="99999"/>
+    <param name="max_trans_diff" value="99999"/>
 
     <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />
 
@@ -24,6 +27,6 @@
   </node>
 
   <!-- Static transform from valve to connector -->
-  <node pkg="tf" type="static_transform_publisher" name="valve_to_connector" args="0 0.38 -0.16 0 0 -0.52 valve_no_rot connector 100" />
+  <node pkg="tf" type="static_transform_publisher" name="valve_to_connector" args="-0.01 0.25 -0.16 0 0 -0.52 valve_no_rot connector 100" />
   
 </launch>

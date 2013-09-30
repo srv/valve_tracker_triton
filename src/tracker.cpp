@@ -243,6 +243,8 @@ void valve_tracker::Tracker::stereoImageCallback(
     // Update tf if valid
     if (valid_tf)
       camera_to_valve_ = curr_camera_to_valve;
+    else if (warning_on_)
+      ROS_WARN("[Tracker:] No valid transform");
   }
 
   // Publish processed image
@@ -306,8 +308,9 @@ void valve_tracker::Tracker::stereoImageCallback(
 
   // Publish an unrotated transform
   tf::Transform camera_to_valve_no_rot;
+  camera_to_valve_no_rot.setIdentity();
   tf::Quaternion rot;
-  rot.setRPY(0.0, 0.0, -yaw);
+  rot.setRPY(0.0, 0.0, pitch);
   camera_to_valve_no_rot.setRotation(rot);
   tf_broadcaster_.sendTransform(
       tf::StampedTransform(camera_to_valve_no_rot, l_image_msg->header.stamp,
