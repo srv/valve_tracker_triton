@@ -4,11 +4,11 @@
   <arg name="image" default="image_rect_color"/>
 
   <node pkg="valve_tracker_triton" type="autotuning_node" name="autotuning_node" output="screen">
-      <param name="left_topic" value="$(arg camera)/left/$(arg image)"/>
-      <param name="right_topic" value="$(arg camera)/right/$(arg image)"/>
+      <param name="left_topic" value="$(arg camera)/left/image_rect_color"/>
+      <param name="right_topic" value="$(arg camera)/right/image_rect_color"/>
       <param name="left_info_topic" value="$(arg camera)/left/camera_info"/>
       <param name="right_info_topic" value="$(arg camera)/right/camera_info"/>
-      <param name="maximum_allowed_error" value="0.01"/>
+      <param name="maximum_allowed_error" value="0.1"/>
 
       <!-- Load model -->
       <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />

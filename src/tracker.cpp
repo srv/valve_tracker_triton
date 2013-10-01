@@ -209,15 +209,22 @@ void valve_tracker::Tracker::stereoImageCallback(
     camera_to_valve_.getBasis().getRPY(prev_roll, prev_pitch, prev_yaw);
     curr_camera_to_valve.getBasis().getRPY(curr_roll, curr_pitch, curr_yaw);
 
+    // Set current roll positive
+    if (curr_roll < 0)
+      curr_roll = -curr_roll;
+    tf::Quaternion rot;
+    rot.setRPY(curr_roll, curr_pitch, curr_yaw);
+    curr_camera_to_valve.setRotation(rot);
+
     // 2) Check maximum roll angle
-    if ( (curr_roll*180/M_PI) < 110.0 && (curr_roll*180/M_PI) > -20.0 &&
+    if ( (curr_roll*180/M_PI) < 190.0 && (curr_roll*180/M_PI) > 0.0 &&
          (curr_yaw*180/M_PI) < 110.0 && (curr_yaw*180/M_PI) > -20.0)
     {
       valid_tf = true;
     }
     else if (warning_on_)
     {
-      ROS_WARN_STREAM("[Tracker:] Roll or Yaw rotation does not fit (-10,+110). Roll: " << 
+      ROS_WARN_STREAM("[Tracker:] Roll or Yaw rotation does not fit (-20,+110). Roll: " << 
                       curr_roll*180/M_PI << "deg. Yaw: " << curr_yaw*180/M_PI);
     }
 
