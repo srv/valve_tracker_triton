@@ -44,7 +44,8 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
       valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
   nhp.param("show_debug", show_debug_, false);
   nhp.param("warning_on", warning_on_, false);
-  nhp.param("tf_filter_size", tf_filter_size_, 0);  
+  nhp.param("tf_filter_size", tf_filter_size_, 0);
+  nhp.param("listen_services", listen_services_, false);   
 
   ROS_INFO_STREAM("[Tracker:] Valve Tracker Settings:" << std::endl <<
                   "  stereo_frame_id            = " << stereo_frame_id_ << std::endl <<
@@ -86,6 +87,15 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
   // Image publisher for future debug
   image_transport::ImageTransport it(nhp);
   image_pub_  = it.advertise("image_detections", 1);
+
+  // Services to start or stop the valve detection
+  start_service_ = nhp.advertiseService("start_valve_detection", &Tracker::startDetection, this);
+  stop_service_ = nhp.advertiseService("stop_valve_detection", &Tracker::stopDetection, this);
+
+  if (listen_services_)
+    do_detection_ = false;
+  else
+    do_detection_ = true;
 
   // Initialize the camera to valve transformation
   camera_to_valve_.setIdentity();
@@ -145,6 +155,13 @@ void valve_tracker::Tracker::stereoImageCallback(
   const sensor_msgs::CameraInfoConstPtr& l_info_msg,
   const sensor_msgs::CameraInfoConstPtr& r_info_msg)
 {
+
+  // Check if service is called or not
+  if (listen_services_ && !do_detection_)
+  {
+    ROS_INFO("[Tracker:] Waiting for start service...");
+    return;
+  }
 
   // Images to opencv
   cv_bridge::CvImagePtr l_cv_image_ptr;
@@ -766,4 +783,16 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
   }
 
   return tgt;
+}
+
+bool valve_tracker::Tracker::startDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
+{
+  do_detection_ = true;
+  return true;
+}
+
+bool valve_tracker::Tracker::stopDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
+{
+  do_detection_ = false;
+  return true;
 }

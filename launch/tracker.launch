@@ -18,6 +18,7 @@
     <param name="warning_on" value="true"/>
     <param name="max_rot_diff" value="99999"/>
     <param name="max_trans_diff" value="99999"/>
+    <param name="listen_services" value="false"/>
 
     <rosparam command="load" file="$(find valve_tracker_triton)/etc/model.yaml" />
 

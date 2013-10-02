@@ -14,6 +14,7 @@
 #include <image_transport/camera_subscriber.h>
 #include <tf/transform_listener.h>
 #include <tf/transform_broadcaster.h>
+#include <std_srvs/Empty.h>
 #include "valve_tracker/stereo_processor.h"
 
 namespace valve_tracker
@@ -55,6 +56,8 @@ private:
   std::string stereo_frame_id_;
   std::string valve_frame_id_;
   image_transport::Publisher image_pub_;
+  ros::ServiceServer start_service_;
+  ros::ServiceServer stop_service_;
 
   // Tracker parameters
   int closing_element_size_;
@@ -74,6 +77,8 @@ private:
   cv::MatND trained_model_;
   bool show_debug_;
   bool warning_on_;
+  bool listen_services_;
+  bool do_detection_;
 
   // TF filter
   int tf_filter_size_;
@@ -102,6 +107,9 @@ private:
   void mouseCallback( int event, int x, int y, 
     int flags, void* param);                              //!> Mouse interface
   void autotuning();                                      //!> Function for autotuning process
+
+  bool startDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&);
+  bool stopDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&);
 };
 
 } // namespace
