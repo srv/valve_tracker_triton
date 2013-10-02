@@ -787,6 +787,7 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
 
 bool valve_tracker::Tracker::startDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
 {
+  camera_to_valve_.setIdentity();
   do_detection_ = true;
   return true;
 }
