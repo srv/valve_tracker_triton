@@ -56,6 +56,7 @@ private:
   std::string stereo_frame_id_;
   std::string valve_frame_id_;
   image_transport::Publisher image_pub_;
+  ros::ServiceServer detect_service_;
   ros::ServiceServer start_service_;
   ros::ServiceServer stop_service_;
 
@@ -79,6 +80,7 @@ private:
   bool warning_on_;
   bool listen_services_;
   bool do_detection_;
+  bool toggle_detection_; // just one detection is required
 
   // TF filter
   int tf_filter_size_;
@@ -108,8 +110,9 @@ private:
     int flags, void* param);                              //!> Mouse interface
   void autotuning();                                      //!> Function for autotuning process
 
-  bool startDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&);
-  bool stopDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&);
+  bool detectSrv(std_srvs::Empty::Request&, std_srvs::Empty::Response&);
+  bool startDetectionSrv(std_srvs::Empty::Request&, std_srvs::Empty::Response&);
+  bool stopDetectionSrv(std_srvs::Empty::Request&, std_srvs::Empty::Response&);
 };
 
 } // namespace

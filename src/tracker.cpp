@@ -89,8 +89,9 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
   image_pub_  = it.advertise("image_detections", 1);
 
   // Services to start or stop the valve detection
-  start_service_ = nhp.advertiseService("start_valve_detection", &Tracker::startDetection, this);
-  stop_service_ = nhp.advertiseService("stop_valve_detection", &Tracker::stopDetection, this);
+  detect_service_ = nhp.advertiseService("detect", &Tracker::detectSrv, this);
+  start_service_ = nhp.advertiseService("start_valve_detection", &Tracker::startDetectionSrv, this);
+  stop_service_ = nhp.advertiseService("stop_valve_detection", &Tracker::stopDetectionSrv, this);
 
   if (listen_services_)
     do_detection_ = false;
@@ -157,7 +158,7 @@ void valve_tracker::Tracker::stereoImageCallback(
 {
 
   // Check if service is called or not
-  if (listen_services_ && !do_detection_)
+  if (listen_services_ && !(do_detection_ || toggle_detection_))
   {
     ROS_INFO("[Tracker:] Waiting for start service...");
     return;
@@ -339,6 +340,8 @@ void valve_tracker::Tracker::stereoImageCallback(
   tf_broadcaster_.sendTransform(
       tf::StampedTransform(camera_to_valve_no_rot, l_image_msg->header.stamp,
       valve_frame_id_, valve_frame_id_+"_no_rot"));
+
+  toggle_detection_ = false;
 }
 
 /** \brief Detect the valve into the image
@@ -785,15 +788,26 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
   return tgt;
 }
 
-bool valve_tracker::Tracker::startDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
+bool valve_tracker::Tracker::detectSrv(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
 {
   camera_to_valve_.setIdentity();
-  do_detection_ = true;
+  do_detection_ = false;
+  toggle_detection_ = true;
+  ROS_INFO("Service Detect requested.");
   return true;
 }
 
-bool valve_tracker::Tracker::stopDetection(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
+bool valve_tracker::Tracker::startDetectionSrv(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
+{
+  camera_to_valve_.setIdentity();
+  do_detection_ = true;
+  ROS_INFO("Service Start Detection requested.");
+  return true;
+}
+
+bool valve_tracker::Tracker::stopDetectionSrv(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
 {
   do_detection_ = false;
+  ROS_INFO("Service Stop Detection requested.");
   return true;
 }
