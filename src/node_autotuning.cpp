@@ -33,6 +33,7 @@ public:
     nhp.param("right_topic", right_topic, std::string("/right/image_rect_color"));
     nhp.param("left_info_topic", left_info_topic, std::string("/left/camera_info"));
     nhp.param("right_info_topic", right_info_topic, std::string("/right/camera_info"));
+    nhp.param("thread_number", max_thread_num_, 2);
     image_transport::ImageTransport it(nh);
     left_sub_ .subscribe(it, left_topic, 1);
     right_sub_.subscribe(it, right_topic, 1);
@@ -198,17 +199,52 @@ public:
     error_list_.resize(parameters_table_.size());
     contours_size_list_.resize(parameters_table_.size());
 
-    // Launch the autotuning process in 4 threads
-    boost::thread autoTuningThread1(&valve_tracker::NodeAutotuning::autotuning_thread, this,1);
-    boost::thread autoTuningThread2(&valve_tracker::NodeAutotuning::autotuning_thread, this,2);
-    boost::thread autoTuningThread3(&valve_tracker::NodeAutotuning::autotuning_thread, this,3);
-    boost::thread autoTuningThread4(&valve_tracker::NodeAutotuning::autotuning_thread, this,4);
+    boost::thread autoTuningThread1;
+    boost::thread autoTuningThread2;
+    boost::thread autoTuningThread3;
+    boost::thread autoTuningThread4;
 
-    // wait for all threads to end
-    autoTuningThread1.join();
-    autoTuningThread2.join();
-    autoTuningThread3.join();
-    autoTuningThread4.join();
+    // Launch the autotuning process in threads
+    switch(max_thread_num_)
+    {
+      case 1: 
+        autoTuningThread1 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,1);
+        // wait for all threads to end
+        autoTuningThread1.join();
+      break;
+      case 2:
+        autoTuningThread1 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,1);
+        autoTuningThread2 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,2);
+        // wait for all threads to end
+        autoTuningThread1.join();
+        autoTuningThread2.join();
+      break;
+      case 3:
+        autoTuningThread1 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,1);
+        autoTuningThread2 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,2);
+        autoTuningThread3 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,3);
+        // wait for all threads to end
+        autoTuningThread1.join();
+        autoTuningThread2.join();
+        autoTuningThread3.join();
+      break;
+      case 4:
+        autoTuningThread1 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,1);
+        autoTuningThread2 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,2);
+        autoTuningThread3 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,3);
+        autoTuningThread4 = boost::thread(&valve_tracker::NodeAutotuning::autotuning_thread, this,4);
+        // wait for all threads to end
+        autoTuningThread1.join();
+        autoTuningThread2.join();
+        autoTuningThread3.join();
+        autoTuningThread4.join();
+        break;
+      default:
+        ROS_ERROR("Number of threads out of bounds. Please, check that number of threads is between 1 and 4.");
+        return;
+        break;
+    }
+    
 
     // Find the indexes with minimum errors
     std::vector<int> contours_list_red_;
@@ -281,8 +317,8 @@ public:
                                    epipolar_width_threshold_);
 
     // Loop through the table of combinations depending on the thread
-    unsigned int start_iter = parameters_table_.size() / 4 * (thread_number - 1);
-    unsigned int end_iter = parameters_table_.size() / 4 * thread_number;
+    unsigned int start_iter = parameters_table_.size() / max_thread_num_ * (thread_number - 1);
+    unsigned int end_iter = parameters_table_.size() / max_thread_num_ * thread_number;
 
     ROS_INFO_STREAM("Instantiating valve tracker instance " << thread_number << " starting from iter " << start_iter << " to " << end_iter);
 
@@ -371,6 +407,7 @@ private:
   int epipolar_width_threshold_;                    //!> For epipolar threshold filtering.
   double maximum_allowed_error_;                    //!> Maximum allowed error.
   bool save_tuned_parameters_;                      //!> To save the tuned parameters into the parameters server.
+  int max_thread_num_;                              //!> Number of threads to use
 
   // Topic properties
   image_transport::SubscriberFilter left_sub_, right_sub_;
