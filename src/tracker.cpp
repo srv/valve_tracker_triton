@@ -44,7 +44,6 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
       valve_tracker::Utils::getPackageDir() + std::string("/etc/trained_model.yml"));
   nhp.param("show_debug", show_debug_, false);
   nhp.param("warning_on", warning_on_, false);
-  nhp.param("tf_filter_size", tf_filter_size_, 0);
   nhp.param("listen_services", listen_services_, false);   
 
   ROS_INFO_STREAM("[Tracker:] Valve Tracker Settings:" << std::endl <<
@@ -61,7 +60,6 @@ valve_tracker::Tracker::Tracker(const std::string transport) : StereoImageProces
                   "  max_tf_error               = " << max_tf_error_ << std::endl <<
                   "  max_rot_diff               = " << max_rot_diff_ << std::endl <<
                   "  max_trans_diff             = " << max_trans_diff_ << std::endl <<
-                  "  tf_filter_size             = " << tf_filter_size_ << std::endl <<
                   "  trained_model_path         = " << trained_model_path_ << std::endl);
 
   // Load the model
@@ -280,45 +278,9 @@ void valve_tracker::Tracker::stereoImageCallback(
     cv_ptr->encoding = "mono8";
     image_pub_.publish(cv_ptr->toImageMsg());
   }
-
-  // Filter tf
-  double x, y, z, roll, pitch, yaw;
-  if (tf_filter_size_ > 0)
-  {
-    // Push back to the filter
-    camera_to_valve_.getBasis().getRPY(roll, pitch, yaw);
-    tf_x_.push_back(camera_to_valve_.getOrigin().x());
-    tf_y_.push_back(camera_to_valve_.getOrigin().y());
-    tf_z_.push_back(camera_to_valve_.getOrigin().z());
-    tf_roll_.push_back(roll);
-    tf_pitch_.push_back(pitch);
-    tf_yaw_.push_back(yaw);
-
-    if (tf_x_.size() > (unsigned int)tf_filter_size_)
-    {
-      tf_x_.erase(tf_x_.begin(), tf_x_.begin() + 1);
-      tf_y_.erase(tf_y_.begin(), tf_y_.begin() + 1);
-      tf_z_.erase(tf_z_.begin(), tf_z_.begin() + 1);
-      tf_roll_.erase(tf_roll_.begin(), tf_roll_.begin() + 1);
-      tf_pitch_.erase(tf_pitch_.begin(), tf_pitch_.begin() + 1);
-      tf_yaw_.erase(tf_yaw_.begin(), tf_yaw_.begin() + 1);
-    }
-
-    double x_mean = std::accumulate(tf_x_.begin(), tf_x_.end(), 0.0) / tf_x_.size();
-    double y_mean = std::accumulate(tf_y_.begin(), tf_y_.end(), 0.0) / tf_y_.size();
-    double z_mean = std::accumulate(tf_z_.begin(), tf_z_.end(), 0.0) / tf_z_.size();
-    double roll_mean = std::accumulate(tf_roll_.begin(), tf_roll_.end(), 0.0) / tf_roll_.size();
-    double pitch_mean = std::accumulate(tf_pitch_.begin(), tf_pitch_.end(), 0.0) / tf_pitch_.size();
-    double yaw_mean = std::accumulate(tf_yaw_.begin(), tf_yaw_.end(), 0.0) / tf_yaw_.size();
-
-    tf::Quaternion rotation;
-    rotation.setRPY(roll_mean, pitch_mean, yaw_mean);
-    tf::Vector3 trans(x_mean, y_mean, z_mean);
-    camera_to_valve_.setRotation(rotation);
-    camera_to_valve_.setOrigin(trans);
-  }
-
+  
   // Log
+  double x, y, z, roll, pitch, yaw;
   camera_to_valve_.getBasis().getRPY(roll, pitch, yaw);
   x = camera_to_valve_.getOrigin().x();
   y = camera_to_valve_.getOrigin().y();

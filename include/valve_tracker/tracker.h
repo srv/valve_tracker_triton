@@ -82,11 +82,6 @@ private:
   bool do_detection_;
   bool toggle_detection_; // just one detection is required
 
-  // TF filter
-  int tf_filter_size_;
-  std::vector<double> tf_x_, tf_y_, tf_z_;
-  std::vector<double> tf_roll_, tf_pitch_, tf_yaw_;
-
   // TF
   tf::TransformBroadcaster tf_broadcaster_;         //!> Transform publisher
   tf::Transform camera_to_valve_;                   //!> Camera to valve transformation

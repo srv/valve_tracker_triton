@@ -14,7 +14,6 @@
     <param name="min_blob_size" value="5"/>
     <param name="max_blob_size" value="200"/>
     <param name="show_debug" value="true"/>
-    <param name="tf_filter_size" value="15"/>  
     <param name="warning_on" value="true"/>
     <param name="max_rot_diff" value="99999"/>
     <param name="max_trans_diff" value="99999"/>
