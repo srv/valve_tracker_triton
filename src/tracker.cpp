@@ -753,6 +753,7 @@ std::vector<cv::Point3d> valve_tracker::Tracker::matchTgtMdlPoints(
 bool valve_tracker::Tracker::detectSrv(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
 {
   camera_to_valve_.setIdentity();
+  valve_symmetric_point_ = cv::Point3d(0.0, 0.0, 0.0);
   do_detection_ = false;
   toggle_detection_ = true;
   ROS_INFO("Service Detect requested.");
@@ -762,6 +763,7 @@ bool valve_tracker::Tracker::detectSrv(std_srvs::Empty::Request&, std_srvs::Empt
 bool valve_tracker::Tracker::startDetectionSrv(std_srvs::Empty::Request&, std_srvs::Empty::Response&)
 {
   camera_to_valve_.setIdentity();
+  valve_symmetric_point_ = cv::Point3d(0.0, 0.0, 0.0);
   do_detection_ = true;
   ROS_INFO("Service Start Detection requested.");
   return true;
