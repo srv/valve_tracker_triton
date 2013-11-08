@@ -158,7 +158,7 @@ void valve_tracker::Tracker::stereoImageCallback(
   // Check if service is called or not
   if (listen_services_ && !(do_detection_ || toggle_detection_))
   {
-    ROS_INFO("[Tracker:] Waiting for start service...");
+    ROS_INFO_ONCE("[Tracker:] Waiting for start service...");
     return;
   }
 
