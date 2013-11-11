@@ -41,6 +41,8 @@ rosbuild_add_executable(trainer_node src/node_trainer.cpp
                                      src/trainer.cpp)
 rosbuild_link_boost(trainer_node signals)
 
+rosbuild_add_executable(camera2camera src/camera2camera.cpp)
+
 #rosbuild_add_executable(autotuning_node src/node_autotuning.cpp
 #										src/tracker.cpp)
 #rosbuild_link_boost(autotuning_node signals)
