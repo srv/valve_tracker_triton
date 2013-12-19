@@ -7,8 +7,8 @@
   <maintainer email="miquel.massot@uib.cat">Miquel Massot</maintainer>
   <maintainer email="pl.negre@uib.cat">Pep Lluis Negre</maintainer>
   <license>BSD</license>
-  <url type="website">https://github.com/srv/template_pose_estimation</url>
-  <url type="bugtracker">https://github.com/srv/template_pose_estimation/issues</url>
+  <url type="website">https://github.com/srv/valve_tracker_triton</url>
+  <url type="bugtracker">https://github.com/srv/valve_tracker_triton/issues</url>
 
   <buildtool_depend>catkin</buildtool_depend>
 
