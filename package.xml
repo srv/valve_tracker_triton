@@ -1,0 +1,30 @@
+<package>
+  <name>valve_tracker_triton</name>
+  <version>0.0.1</version>
+  <description>3D valve tracker for triton project</description>
+  <author email="miquel.massot@uib.cat">Miquel Massot</author>
+  <author email="pl.negre@uib.cat">Pep Lluis Negre</author>
+  <maintainer email="miquel.massot@uib.cat">Miquel Massot</maintainer>
+  <maintainer email="pl.negre@uib.cat">Pep Lluis Negre</maintainer>
+  <license>BSD</license>
+  <url type="website">https://github.com/srv/template_pose_estimation</url>
+  <url type="bugtracker">https://github.com/srv/template_pose_estimation/issues</url>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>roscpp</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>image_transport</build_depend>
+  <build_depend>image_geometry</build_depend>
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>tf</build_depend>
+  <build_depend>std_srvs</build_depend>
+
+  <run_depend>roscpp</run_depend>
+  <run_depend>sensor_msgs</run_depend>
+  <run_depend>image_transport</run_depend>
+  <run_depend>image_geometry</run_depend>
+  <run_depend>cv_bridge</run_depend>
+  <run_depend>tf</run_depend>
+  <run_depend>std_srvs</run_depend>
+</package>
